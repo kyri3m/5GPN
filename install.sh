@@ -13,8 +13,8 @@ set -euo pipefail
 REPO_URL="https://github.com/kyri3m/5GPN.git"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename "$0")"
-BASE_DIR="/opt/proxy-gateway"
-CONF_DIR="${BASE_DIR}/etc"
+BASE_DIR="${SCRIPT_DIR}"
+CONF_DIR="${BASE_DIR}/runtime"
 SRC_DIR="${BASE_DIR}/src"
 WWW_DIR="${BASE_DIR}/www"
 IOS_PROFILE_PORT=8111
@@ -32,10 +32,10 @@ KEEP_FILE="/etc/proxy-gateway/keep-categories"
 DIRECT_FILE="/etc/proxy-gateway/direct-categories"
 RULES_DEFAULT="/etc/proxy-gateway/rules-default.conf"
 RULESET_CACHE="/etc/proxy-gateway/rulesets"
-SINGBOX_BIN="/opt/proxy-gateway/bin/sing-box"
-SINGBOX_CFG_GEN="/opt/proxy-gateway/bin/singbox-exit-config.py"
-SINGBOX_ROUTER_GEN="/opt/proxy-gateway/bin/singbox-router-config.py"
-RULES_IMPORT="/opt/proxy-gateway/bin/rules-import.py"
+SINGBOX_BIN="${BASE_DIR}/bin/sing-box"
+SINGBOX_CFG_GEN="${BASE_DIR}/bin/singbox-exit-config.py"
+SINGBOX_ROUTER_GEN="${BASE_DIR}/bin/singbox-router-config.py"
+RULES_IMPORT="${BASE_DIR}/bin/rules-import.py"
 SINGBOX_VERSION_DEFAULT="1.12.25"
 DEFAULT_REMOTE_DNS=("1.1.1.1" "8.8.8.8")
 DEFAULT_LOCAL_DNS=("223.5.5.5" "119.29.29.29")
@@ -1113,15 +1113,15 @@ install_quic_proxy() {
     fi
 
     # systemd service
-    cat > /etc/systemd/system/quic-proxy.service <<'EOF'
+    cat > /etc/systemd/system/quic-proxy.service <<EOF
 [Unit]
 Description=quic-proxy (UDP/QUIC SNI transparent proxy)
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=/opt/proxy-gateway/bin/quic-proxy -l 0.0.0.0:443
-ExecReload=/bin/kill -HUP $MAINPID
+ExecStart=${BASE_DIR}/bin/quic-proxy -l 0.0.0.0:443
+ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=5
 User=pxout
@@ -1160,7 +1160,7 @@ Before=dnsdist.service
 
 [Service]
 Type=simple
-ExecStart=/opt/proxy-gateway/bin/china-dns-race-proxy -l 127.0.0.1:5301 -upstreams ${local_dns_with_ports}
+ExecStart=${BASE_DIR}/bin/china-dns-race-proxy -l 127.0.0.1:5301 -upstreams ${local_dns_with_ports}
 Restart=on-failure
 RestartSec=3
 User=root
@@ -2899,7 +2899,7 @@ set_custom_dns() {
     if [[ -f /etc/systemd/system/china-dns-race-proxy.service ]]; then
         local local_dns_with_ports
         local_dns_with_ports=$(dns_upstreams_with_ports "$local_dns")
-        sed -i -E "s#^ExecStart=/opt/proxy-gateway/bin/china-dns-race-proxy -l 127\\.0\\.0\\.1:5301( -upstreams [^[:space:]]+)?#ExecStart=/opt/proxy-gateway/bin/china-dns-race-proxy -l 127.0.0.1:5301 -upstreams ${local_dns_with_ports}#" /etc/systemd/system/china-dns-race-proxy.service
+        sed -i -E "s#^ExecStart=/opt/proxy-gateway/bin/china-dns-race-proxy -l 127\\.0\\.0\\.1:5301( -upstreams [^[:space:]]+)?#ExecStart=${BASE_DIR}/bin/china-dns-race-proxy -l 127.0.0.1:5301 -upstreams ${local_dns_with_ports}#" /etc/systemd/system/china-dns-race-proxy.service
         systemctl daemon-reload
     fi
 
