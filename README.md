@@ -105,6 +105,30 @@ chmod +x install.sh
 sudo ./install.sh
 ```
 
+### 自包含部署（从仓库目录直接运行）
+
+适合开发或希望代码和运行在同一目录的场景：
+
+```bash
+git clone https://github.com/kyri3m/5GPN.git
+cd 5GPN
+
+# 1. 创建敏感配置（runtime/ 已被 gitignore 保护）
+mkdir -p runtime
+cp deploy/tgbot.env.example runtime/tgbot.env
+# 编辑填入真实值
+vi runtime/tgbot.env
+chmod 600 runtime/tgbot.env
+
+# 2. 运行 install.sh 安装依赖和服务
+sudo ./install.sh
+
+# 3. 更新 systemd unit 指向当前目录（如果 install.sh 未自动处理）
+sudo sed -i "s|/opt/proxy-gateway|$(pwd)|g" /etc/systemd/system/proxy-gateway-tgbot.service
+sudo systemctl daemon-reload
+sudo systemctl restart proxy-gateway-tgbot
+```
+
 ### 非交互安装
 
 无 TTY 环境必须设置 `DOMAIN`，否则脚本会直接退出，避免卡在输入提示。
