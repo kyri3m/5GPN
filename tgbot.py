@@ -38,7 +38,7 @@ TOKEN = os.environ.get("TG_BOT_TOKEN", "").strip()
 ADMIN_IDS = {
     int(x) for x in re.split(r"[,\s]+", os.environ.get("TG_ADMIN_IDS", "").strip()) if x
 }
-MGMT = os.environ.get("MGMT", "/opt/proxy-gateway/bin/proxy-gateway-ctl")
+MGMT = os.environ.get("MGMT", "/root/5GPN/install.sh")
 API = "https://api.telegram.org/bot%s/" % TOKEN
 
 # Thread pool for background tasks (replaces raw threading.Thread)
