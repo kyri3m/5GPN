@@ -1,0 +1,9 @@
+[Unit]
+Description=Proxy Gateway iOS profile HTTP socket
+
+[Socket]
+ListenStream=0.0.0.0:8111
+Accept=yes
+
+[Install]
+WantedBy=sockets.target

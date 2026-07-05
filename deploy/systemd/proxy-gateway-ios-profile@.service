@@ -1,0 +1,11 @@
+[Unit]
+Description=Proxy Gateway iOS profile responder (per-connection)
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/proxy-gateway/bin/ios-http.py
+Environment=WWW_DIR=/opt/proxy-gateway/www
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+User=root

@@ -1,0 +1,12 @@
+[Unit]
+Description=Proxy Gateway egress exit selector
+After=network-online.target nftables.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/proxy-gateway-apply-exit.sh
+
+[Install]
+WantedBy=multi-user.target
