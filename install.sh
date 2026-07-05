@@ -483,6 +483,83 @@ detect_os() {
     info "Detected OS: $OS $VER (package manager: $PKG_MGR)"
 }
 
+# Preflight: verify architecture, commands, and connectivity before install.
+preflight_check() {
+    echo ""
+    echo "=========================================="
+    echo "  5GPN 环境检查"
+    echo "=========================================="
+    echo ""
+
+    # ---- architecture ----
+    local arch
+    arch=$(uname -m)
+    case "$arch" in
+        x86_64)  arch="amd64" ;;
+        aarch64) arch="arm64" ;;
+        *)
+            err "不支持的系统架构: $arch（仅支持 amd64 / arm64）"
+            exit 1
+            ;;
+    esac
+    ok "系统架构: $arch"
+
+    # ---- required commands ----
+    local missing=()
+    for cmd in curl wget git tar; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            missing+=("$cmd")
+        fi
+    done
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        warn "缺少以下命令: ${missing[*]}，正在安装..."
+        $PKG_MGR update -qq
+        $PKG_MGR install -y -qq "${missing[@]}" || {
+            err "安装依赖失败，请手动安装: ${missing[*]}"
+            exit 1
+        }
+    fi
+    ok "基础命令: curl wget git tar"
+
+    # ---- internet connectivity ----
+    if ! curl -s --max-time 5 https://github.com >/dev/null 2>&1; then
+        warn "无法访问 github.com，尝试备用检测..."
+        if ! curl -s --max-time 5 https://cloudflare.com >/dev/null 2>&1; then
+            err "无法连接互联网，请检查网络。脚本需要访问 GitHub 和外部源。"
+            exit 1
+        fi
+    fi
+    ok "网络连通: 正常"
+
+    # ---- disk space ----
+    local avail_kb
+    avail_kb=$(df -k "${SCRIPT_DIR}" | awk 'NR==2 {print $4}')
+    if [[ "$avail_kb" -lt 524288 ]]; then  # 512MB
+        warn "磁盘剩余空间不足 512MB（当前: $((avail_kb / 1024))MB），可能导致安装失败"
+    else
+        ok "磁盘空间: $((avail_kb / 1024))MB 可用"
+    fi
+
+    # ---- OS version ----
+    case "$OS" in
+        ubuntu)
+            if [[ -n "$VER" ]] && awk "BEGIN {exit !($VER < 20.04)}" 2>/dev/null; then
+                warn "Ubuntu $VER 较旧，建议 20.04 以上"
+            fi
+            ;;
+        debian)
+            if [[ -n "$VER" ]] && [[ "$VER" -lt 11 ]]; then
+                warn "Debian $VER 较旧，建议 11 以上"
+            fi
+            ;;
+    esac
+    ok "系统兼容: $OS $VER"
+
+    echo ""
+    info "环境检查通过，开始安装..."
+    sleep 1
+}
+
 # Detect the available RAM and decide whether to use the low-memory profile.
 # Sets globals: MEM_TOTAL_MB, LOWMEM (0/1), MAKE_JOBS, PACKET_CACHE_SIZE.
 # Honors an explicit override: LOWMEM=1 / LOWMEM=0 in the environment.
@@ -2933,13 +3010,14 @@ set_custom_dns() {
 main_install() {
     check_root
     detect_os
+    preflight_check
     detect_memory_profile
     ensure_swap
     get_public_ip
 
     echo ""
     echo "=========================================="
-    echo "  高性能反代系统一键部署"
+    echo "  5GPN 透明代理网关部署"
     echo "=========================================="
     echo ""
 
