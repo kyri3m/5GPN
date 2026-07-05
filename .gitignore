@@ -13,6 +13,8 @@ deploy/tgbot.env
 *.env
 !*.env.example
 
-# Runtime state
+# Runtime state (sensitive data — NOT committed)
 /opt/
 /etc/
+runtime/*
+!runtime/README.md

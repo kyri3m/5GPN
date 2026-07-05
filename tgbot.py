@@ -65,8 +65,8 @@ EXIT_ADD_NAME_RE = re.compile(r"^[\w\-一-鿿]{1,16}$", re.UNICODE)  # 'local' i
 DOMAIN_RE = re.compile(r"^(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$")
 DNS_LIST_RE = re.compile(r"^[0-9A-Fa-f:.,\s]+$")
 WWW_DIR = "/opt/proxy-gateway/www"
-PORT_NOTES_FILE = "/opt/proxy-gateway/etc/port-notes.json"
-GFWLIST_EXTRA = "/etc/dnsdist/gfwlist-extra-local.txt"
+PORT_NOTES_FILE = "/root/5GPN/runtime/port-notes.json"
+GFWLIST_EXTRA = "/etc/dnsdist/gfwlist-extra-local.txt"  # shared with dnsdist
 
 # Per-chat conversational state for multi-step flows (e.g. add-exit).
 PENDING = {}

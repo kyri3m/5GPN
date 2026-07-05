@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=/opt/proxy-gateway/etc/tgbot.env
-ExecStart=/usr/bin/python3 /opt/proxy-gateway/bin/tgbot.py
+EnvironmentFile=/root/5GPN/runtime/tgbot.env
+ExecStart=/usr/bin/python3 /root/5GPN/tgbot.py
 Restart=on-failure
 RestartSec=5
 User=root

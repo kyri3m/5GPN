@@ -1,0 +1,4 @@
+# Ignore everything in runtime/ — this directory contains sensitive configs
+*
+!.gitignore
+!README.md
