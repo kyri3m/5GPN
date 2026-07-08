@@ -2105,7 +2105,7 @@ def handle_callback(cb):
              "发送规则集 URL，支持：\n"
              "• Clash rule-provider YAML\n"
              "• Surge / Quantumult 列表\n"
-             "• sing-box .srs 文件\n"
+             "• sing-box .srs / mihomo YAML 规则集\n"
              "• 纯文本域名列表\n\n"
              "发送 /cancel 取消。")
     elif data == "rules:refresh":
@@ -2146,7 +2146,7 @@ def handle_callback(cb):
              "发送规则集 URL，会自动提取域名并合并到 GFWList：\n"
              "• Clash / Surge 规则\n"
              "• 纯文本域名列表\n"
-             "• sing-box .srs\n\n"
+             "• mihomo / sing-box 规则集\n"
              "已存在的域名会自动跳过。\n发送 /cancel 取消。")
 
     elif data == "gfwl:show":

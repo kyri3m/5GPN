@@ -1,0 +1,16 @@
+[Unit]
+Description=Proxy Gateway mihomo exit (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=${BASE_DIR}/bin/mihomo -d /etc/proxy-gateway/exits -f /etc/proxy-gateway/exits/%i.yaml
+ExecStartPost=-/usr/local/bin/proxy-gateway-apply-exit.sh
+Restart=on-failure
+RestartSec=5
+User=root
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
