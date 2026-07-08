@@ -45,7 +45,7 @@ if [[ "${install}" != *'rm -f /etc/systemd/system/{sniproxy,quic-proxy,china-dns
     exit 1
 fi
 
-if [[ "${install}" != *'ExecStart=/opt/proxy-gateway/bin/china-dns-race-proxy -l 127.0.0.1:5301'* ]]; then
+if [[ "${install}" != *'ExecStart=${BASE_DIR}/bin/china-dns-race-proxy -l 127.0.0.1:5301'* ]]; then
     echo "china-dns-race-proxy must listen on the dnsdist China pool address." >&2
     exit 1
 fi

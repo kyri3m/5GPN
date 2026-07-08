@@ -2973,7 +2973,7 @@ set_custom_dns() {
     if [[ -f /etc/systemd/system/china-dns-race-proxy.service ]]; then
         local local_dns_with_ports
         local_dns_with_ports=$(dns_upstreams_with_ports "$local_dns")
-        sed -i -E "s#^ExecStart=/opt/proxy-gateway/bin/china-dns-race-proxy -l 127\\.0\\.0\\.1:5301( -upstreams [^[:space:]]+)?#ExecStart=${BASE_DIR}/bin/china-dns-race-proxy -l 127.0.0.1:5301 -upstreams ${local_dns_with_ports}#" /etc/systemd/system/china-dns-race-proxy.service
+        sed -i -E "s#^ExecStart=\${BASE_DIR}/bin/china-dns-race-proxy -l 127\\.0\\.0\\.1:5301( -upstreams [^[:space:]]+)?#ExecStart=${BASE_DIR}/bin/china-dns-race-proxy -l 127.0.0.1:5301 -upstreams ${local_dns_with_ports}#" /etc/systemd/system/china-dns-race-proxy.service
         systemctl daemon-reload
     fi
 
