@@ -321,8 +321,8 @@ SERVER_IP=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[\d.]+' || echo "
 DOMAIN=$(cat "${BASE_DIR}/.domain" 2>/dev/null || echo "example.com")
 
 CERT_BASENAME="${DOMAIN}"
-if [[ -f "/opt/proxy-gateway/etc/.cert_basename" ]]; then
-    CERT_BASENAME=$(cat "/opt/proxy-gateway/etc/.cert_basename")
+if [[ -f "${BASE_DIR:-/opt/proxy-gateway}/runtime/.cert_basename" ]]; then
+    CERT_BASENAME=$(cat "${BASE_DIR:-/opt/proxy-gateway}/runtime/.cert_basename")
 fi
 REMOTE_DNS=$(cat "${BASE_DIR}/.remote_dns" 2>/dev/null || cat "${BASE_DIR}/.overseas_dns" 2>/dev/null || echo "${DEFAULT_REMOTE_DNS[*]}")
 REMOTE_DNS_SERVERS=$(render_remote_dns_servers "$REMOTE_DNS" "remote" "remote")

@@ -3,8 +3,8 @@ Description=Proxy Gateway iOS profile responder (per-connection)
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /opt/proxy-gateway/bin/ios-http.py
-Environment=WWW_DIR=/opt/proxy-gateway/www
+ExecStart=/usr/bin/python3 /root/5GPN/ios-http.py
+Environment=WWW_DIR=/root/5GPN/www
 StandardInput=socket
 StandardOutput=socket
 StandardError=journal

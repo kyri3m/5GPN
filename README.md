@@ -437,8 +437,13 @@ Bot `🏷 GFWList` 菜单管理额外代理域名：
 .
 ├── install.sh                 # 主安装/管理脚本
 ├── tgbot.py                   # Telegram Bot（核心）
-├── quic-proxy.go              # QUIC 透明代理
-├── china-dns-race-proxy.go    # 国内 DNS 竞速代理
+├── cmd/
+│   ├── quic-proxy/
+│   │   ├── quic-proxy.go          # QUIC 透明代理
+│   │   └── quic-proxy_test.go
+│   └── china-dns-race-proxy/
+│       ├── china-dns-race-proxy.go # 国内 DNS 竞速代理
+│       └── china-dns-race-proxy_test.go
 ├── dnsdist.conf.template      # dnsdist 配置模板
 ├── sniproxy.conf              # sniproxy 配置
 ├── singbox-router-config.py   # sing-box 智能分流路由生成

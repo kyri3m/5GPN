@@ -44,6 +44,9 @@ API = "https://api.telegram.org/bot%s/" % TOKEN
 # Thread pool for background tasks (replaces raw threading.Thread)
 _POOL = ThreadPoolExecutor(max_workers=6, thread_name_prefix="tgbot")
 
+# Project root directory (configurable via BASE_DIR env, defaults to /opt/proxy-gateway)
+_PROJECT_DIR = os.environ.get("BASE_DIR", "/opt/proxy-gateway")
+
 # Services the bot may tail. Order matters for display only.
 SERVICES = [
     "dnsdist",
@@ -64,7 +67,7 @@ EXIT_NAME_RE = re.compile(r"^(local|[\w\-一-鿿]{1,16})$", re.UNICODE)
 EXIT_ADD_NAME_RE = re.compile(r"^[\w\-一-鿿]{1,16}$", re.UNICODE)  # 'local' is reserved
 DOMAIN_RE = re.compile(r"^(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$")
 DNS_LIST_RE = re.compile(r"^[0-9A-Fa-f:.,\s]+$")
-WWW_DIR = "/opt/proxy-gateway/www"
+WWW_DIR = os.environ.get("WWW_DIR", os.path.join(_PROJECT_DIR, "www"))
 PORT_NOTES_FILE = "/root/5GPN/runtime/port-notes.json"
 GFWLIST_EXTRA = "/etc/dnsdist/gfwlist-extra-local.txt"  # shared with dnsdist
 
@@ -859,14 +862,14 @@ def op_status():
     svc_line = "  ".join(svc_icons)
 
     # ---- key info ----
-    cur = _read_file("/opt/proxy-gateway/etc/current-exit") or "local"
+    cur = _read_file(os.path.join(_PROJECT_DIR, "runtime/current-exit")) or "local"
     if cur == "local":
         exit_line = "🌐 出口：<b>local</b>（本机直出）"
     else:
         t = _read_file("/etc/proxy-gateway/exits/%s.type" % cur) or "?"
         exit_line = "🌐 出口：<b>%s</b>（%s）" % (html.escape(cur), html.escape(t))
 
-    domain = _read_file("/etc/dnsdist/.domain") or _read_file("/opt/proxy-gateway/etc/.domain") or "未设置"
+    domain = _read_file("/etc/dnsdist/.domain") or _read_file(os.path.join(_PROJECT_DIR, "runtime/.domain")) or "未设置"
     cs = _read_file("/etc/dnsdist/.cache_size")
     extra_lines = []
     if cs.isdigit():
@@ -908,7 +911,7 @@ def op_set_exit(name):
 
 
 def exits_overview_text():
-    cur = _read_file("/opt/proxy-gateway/etc/current-exit") or "local"
+    cur = _read_file(os.path.join(_PROJECT_DIR, "runtime/current-exit")) or "local"
     if cur == "local":
         desc, icon = "本机直出", "🏠"
     else:
@@ -1035,7 +1038,7 @@ def op_renew_cert():
 
 
 def op_dot_status():
-    domain = _read_file("/etc/dnsdist/.domain") or _read_file("/opt/proxy-gateway/etc/.domain") or "未设置"
+    domain = _read_file("/etc/dnsdist/.domain") or _read_file(os.path.join(_PROJECT_DIR, "runtime/.domain")) or "未设置"
     remote_dns = (_read_file("/etc/dnsdist/.remote_dns") or
                   _read_file("/etc/dnsdist/.overseas_dns") or "?")
     local_dns = (_read_file("/etc/dnsdist/.local_dns") or "?")
@@ -1269,7 +1272,7 @@ def parse_exit_names():
 
 
 def op_ios_send(chat_id):
-    domain = _read_file("/etc/dnsdist/.domain") or _read_file("/opt/proxy-gateway/etc/.domain")
+    domain = _read_file("/etc/dnsdist/.domain") or _read_file(os.path.join(_PROJECT_DIR, "runtime/.domain"))
     if domain:
         url = "http://%s:8111/ios-dot.mobileconfig" % domain
     else:
@@ -1624,7 +1627,7 @@ def policy_targets_menu(idx):
 
 
 def exits_menu():
-    cur = _read_file("/opt/proxy-gateway/etc/current-exit") or "local"
+    cur = _read_file(os.path.join(_PROJECT_DIR, "runtime/current-exit")) or "local"
     rows = []
     for name in parse_exit_names():
         marker = " ✅" if name == cur else ""

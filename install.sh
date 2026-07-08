@@ -42,9 +42,10 @@ DEFAULT_LOCAL_DNS=("223.5.5.5" "119.29.29.29")
 
 bootstrap_from_repo_if_needed() {
     local required=(
-        install.sh renew-hook.sh sniproxy.conf quic-proxy.go china-dns-race-proxy.go
+        install.sh renew-hook.sh sniproxy.conf
         dnsdist.conf.template update-rules.sh ios-http.py tgbot.py rules-import.py
         singbox-exit-config.py singbox-router-config.py rules-default.conf
+        cmd/quic-proxy/quic-proxy.go cmd/china-dns-race-proxy/china-dns-race-proxy.go
     )
     local missing=0 f tmpdir
 
@@ -1179,12 +1180,10 @@ install_quic_proxy() {
     if [[ ! -x "${BASE_DIR}/bin/quic-proxy" ]]; then
         info "Compiling quic-proxy (UDP/QUIC SNI proxy)..."
         mkdir -p "${BASE_DIR}/bin"
-        mkdir -p "${SRC_DIR}"
-        cp "${SCRIPT_DIR}/quic-proxy.go" "${SRC_DIR}/quic-proxy.go"
-        cd "${SRC_DIR}"
 
         export PATH=$PATH:/usr/local/go/bin
-        go build -ldflags="-s -w" -o "${BASE_DIR}/bin/quic-proxy" quic-proxy.go
+        cd "${SCRIPT_DIR}"
+        go build -ldflags="-s -w" -o "${BASE_DIR}/bin/quic-proxy" ./cmd/quic-proxy
     else
         info "quic-proxy already compiled"
     fi
@@ -1220,12 +1219,10 @@ EOF
 install_china_dns_race_proxy() {
     info "Compiling china-dns-race-proxy..."
     mkdir -p "${BASE_DIR}/bin"
-    mkdir -p "${SRC_DIR}"
-    cp "${SCRIPT_DIR}/china-dns-race-proxy.go" "${SRC_DIR}/china-dns-race-proxy.go"
-    cd "${SRC_DIR}"
 
     export PATH=$PATH:/usr/local/go/bin
-    go build -ldflags="-s -w" -o "${BASE_DIR}/bin/china-dns-race-proxy" china-dns-race-proxy.go
+    cd "${SCRIPT_DIR}"
+    go build -ldflags="-s -w" -o "${BASE_DIR}/bin/china-dns-race-proxy" ./cmd/china-dns-race-proxy
 
     local local_dns_with_ports
     local_dns_with_ports=$(dns_upstreams_with_ports "$LOCAL_DNS")

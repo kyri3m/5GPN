@@ -35,7 +35,7 @@ EXITS_DIR = os.environ.get("EXITS_DIR", "/etc/proxy-gateway/exits")
 WG_DIR = os.environ.get("WG_DIR", "/etc/wireguard")
 CACHE_DIR = os.environ.get("PGW_RULESET_CACHE", "/etc/proxy-gateway/rulesets")
 STACK = os.environ.get("SINGBOX_STACK", "gvisor")
-SINGBOX_BIN = os.environ.get("SINGBOX_BIN", "/opt/proxy-gateway/bin/sing-box")
+SINGBOX_BIN = os.environ.get("SINGBOX_BIN", os.path.join(os.environ.get("BASE_DIR", "/opt/proxy-gateway"), "bin/sing-box"))
 POLICY_MAP_FILE = os.environ.get("PGW_POLICY_MAP", "/etc/proxy-gateway/policy-map.conf")
 DEFAULT_TARGET = os.environ.get("PGW_DEFAULT_TARGET", "direct")
 try:

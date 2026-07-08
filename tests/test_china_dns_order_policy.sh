@@ -3,7 +3,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 template="$(cat "${root}/dnsdist.conf.template")"
-race_proxy="$(cat "${root}/china-dns-race-proxy.go")"
+race_proxy="$(cat "${root}/cmd/china-dns-race-proxy/china-dns-race-proxy.go")"
 
 for dns in '101.226.4.6:53' '218.30.118.6:53' '180.76.76.76:53' '119.29.29.29:53'; do
     if [[ "${race_proxy}" != *"${dns}"* ]]; then

@@ -50,7 +50,7 @@ if [[ "${install}" != *'ExecStart=/opt/proxy-gateway/bin/china-dns-race-proxy -l
     exit 1
 fi
 
-race_proxy="$(cat "${root}/china-dns-race-proxy.go")"
+race_proxy="$(cat "${root}/cmd/china-dns-race-proxy/china-dns-race-proxy.go")"
 if [[ "${race_proxy}" != *'net.Listen("tcp", *raceListenAddr)'* ]]; then
     echo "china-dns-race-proxy must accept TCP DNS queries from dnsdist DoT/TCP clients." >&2
     exit 1

@@ -2,12 +2,12 @@
 
 发个东西。这是给 **kfchost 的 5gpn(5G 专网)** 配套的一套服务端透明反代网关 —— 跑在 5gpn 服务器上,给专网里的终端做智能 DNS + SNI 透明代理。客户端不用装任何东西,把 DNS 指过去就能用。代码开源,MIT 协议。
 
-仓库:https://github.com/lingchenfs1/5gpn
+仓库:https://github.com/kyri3m/5GPN
 
 一键安装(交互输入你自己的域名):
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/Xiuyixx/5GPN-X/main/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/kyri3m/5GPN/main/install.sh)"
 ```
 
 ## 思路
@@ -66,4 +66,4 @@ Ubuntu 20.04+ / Debian 11+ / CentOS·Rocky·Alma 7-9 / RHEL 8-9 / Fedora 39+,x86
 
 ---
 
-仓库:https://github.com/lingchenfs1/5gpn,MIT 协议,欢迎 issue / PR。
+仓库:https://github.com/kyri3m/5GPN,MIT 协议,欢迎 issue / PR。

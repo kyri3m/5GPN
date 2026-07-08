@@ -2,7 +2,7 @@
 # Let's Encrypt renewal hook - copy certs to dnsdist-readable location and reload
 set -e
 
-DOMAIN=$(cat /opt/proxy-gateway/etc/.domain 2>/dev/null || cat /etc/dnsdist/.domain 2>/dev/null || true)
+DOMAIN=$(cat "${BASE_DIR:-/opt/proxy-gateway}/runtime/.domain" 2>/dev/null || cat /etc/dnsdist/.domain 2>/dev/null || true)
 if [[ -n "$DOMAIN" && -d "/etc/letsencrypt/live/${DOMAIN}" ]]; then
     LIVE_DIR="/etc/letsencrypt/live/${DOMAIN}"
 else

@@ -5,14 +5,15 @@ __pycache__/
 *.log
 
 # Go build artifacts
-china-dns-race-proxy
-quic-proxy
 bin/
 
 # Deployment secrets (do NOT commit)
 deploy/tgbot.env
 *.env
 !*.env.example
+
+# Hermes Agent plans
+.hermes/
 
 # Runtime state (sensitive data — NOT committed)
 /opt/
