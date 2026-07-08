@@ -47,6 +47,12 @@ _POOL = ThreadPoolExecutor(max_workers=6, thread_name_prefix="tgbot")
 # Project root directory (configurable via BASE_DIR env, defaults to /opt/proxy-gateway)
 _PROJECT_DIR = os.environ.get("BASE_DIR", "/opt/proxy-gateway")
 
+# Rule management paths
+RULES_PATH = "/etc/proxy-gateway/rules.conf"
+POLICY_PATH = "/etc/proxy-gateway/policy-map.conf"
+RULES_IMPORT = os.path.join(_PROJECT_DIR, "rules-import.py")
+GFWLIST_RULESETS_FILE = "/etc/dnsdist/gfwlist-rulesets.txt"
+
 # Services the bot may tail. Order matters for display only.
 SERVICES = [
     "dnsdist",
@@ -1162,7 +1168,6 @@ def op_logs(svc):
 # --------------------------------------------------------------------------- #
 # Smart-routing rules (the 'smart' exit)
 # --------------------------------------------------------------------------- #
-RULES_PATH = "/etc/proxy-gateway/rules.conf"
 
 
 def _rule_entries():
@@ -1171,6 +1176,135 @@ def _rule_entries():
     entries = [(i, l) for i, l in enumerate(lines)
                if l.strip() and not l.strip().startswith(("#", ";"))]
     return lines, entries
+
+
+def rules_summary():
+    """Generate summary line for rules panel."""
+    _, entries = _rule_entries()
+    cats = set()
+    rs_count = 0
+    for _, line in entries:
+        parts = line.split(",")
+        typ = parts[0].strip().upper() if parts else ""
+        if typ in ("RULE-SET", "RULESET"):
+            rs_count += 1
+        if len(parts) >= 3:
+            cats.add(parts[-1].strip())
+    cur_exit = _read_file(os.path.join(_PROJECT_DIR, "runtime/current-exit")) or "local"
+    parts = ["%d 条规则" % len(entries)]
+    if rs_count:
+        parts.append("%d 个规则集" % rs_count)
+    parts.append("%d 个分类" % len(cats))
+    return " · ".join(parts)
+
+
+def rule_type_menu():
+    return [
+        [{"text": "🌐 域名全匹配 (DOMAIN)", "callback_data": "rt:DOMAIN"},
+         {"text": "🌍 域名后缀 (SUFFIX)", "callback_data": "rt:DOMAIN-SUFFIX"}],
+        [{"text": "🔑 域名关键词 (KEYWORD)", "callback_data": "rt:DOMAIN-KEYWORD"},
+         {"text": "📡 IP段 (IP-CIDR)", "callback_data": "rt:IP-CIDR"}],
+        [{"text": "🗺 地理站点 (GEOSITE)", "callback_data": "rt:GEOSITE"},
+         {"text": "🌏 地理IP (GEOIP)", "callback_data": "rt:GEOIP"}],
+        [{"text": "« 返回", "callback_data": "menu:rules"}],
+    ]
+
+
+def rule_target_menu(typ, value):
+    rows = []
+    for e in _targets():
+        rows.append([{"text": "➡ " + e, "callback_data": "rta:%s:%s:%s" % (typ, value, e)}])
+    rows.append([{"text": "🌍 直连", "callback_data": "rta:%s:%s:direct" % (typ, value)},
+                 {"text": "🚫 拒绝", "callback_data": "rta:%s:%s:block" % (typ, value)}])
+    rows.append([{"text": "« 返回", "callback_data": "menu:rules"}])
+    return rows
+
+
+def presets_menu():
+    rows = []
+    for name in PRESETS:
+        rows.append([{"text": name, "callback_data": "preset:%s" % name}])
+    rows.append([{"text": "« 返回", "callback_data": "menu:rules"}])
+    return rows
+
+
+def _read_gfwlist_rulesets():
+    """Read GFWList rule-set URLs from file."""
+    try:
+        with open(GFWLIST_RULESETS_FILE) as f:
+            return [l.strip() for l in f if l.strip() and not l.strip().startswith("#")]
+    except OSError:
+        return []
+
+
+def _save_gfwlist_ruleset(url):
+    """Append a rule-set URL to GFWList rulesets file."""
+    existing = set(_read_gfwlist_rulesets())
+    if url in existing:
+        return
+    os.makedirs(os.path.dirname(GFWLIST_RULESETS_FILE), exist_ok=True)
+    with open(GFWLIST_RULESETS_FILE, "a") as f:
+        f.write(url + "\n")
+
+
+def _gfwl_count():
+    """Count built-in GFWList entries in dnsdist.conf."""
+    try:
+        if os.path.exists("/etc/dnsdist/dnsdist.conf"):
+            return sum(1 for l in open("/etc/dnsdist/dnsdist.conf") if "gfwList:add" in l)
+    except Exception:
+        pass
+    return 0
+
+
+def op_refresh_rulesets():
+    """Re-download and re-compile all remote rule-sets."""
+    ok, out = run2(["bash", MGMT, "--regen-smart"], timeout=300)
+    if ok:
+        return "✅ 规则集已刷新"
+    return "❌ 刷新失败：%s" % html.escape(_reason(out))
+
+
+def op_import_ruleset(url, target):
+    """Import rules from URL as RULE-SET."""
+    target = target.strip() or "Proxy"
+    ok, out = run2(["python3", RULES_IMPORT, "--from-url", url, target], timeout=120)
+    if not ok:
+        return "❌ 导入失败：%s" % html.escape(out)
+    # Parse result: rules lines + stderr with stats
+    rules_lines = [l for l in out.splitlines() if l and not l.startswith("imported=")]
+    if not rules_lines:
+        return "❌ 未提取到有效规则"
+    # Append as RULE-SET line to existing rules
+    existing = _read_file(RULES_PATH)
+    new_line = "RULE-SET,%s,%s" % (url, target)
+    new_content = existing.rstrip("\n") + "\n" + new_line + "\n"
+    ok2, out2 = run2(["bash", MGMT, "--set-rules"], inp=new_content, timeout=180)
+    if ok2:
+        count = len(rules_lines)
+        return "✅ 导入完成：%d 条规则 → 分类 <b>%s</b>\n规则已保存为 RULE-SET" % (count, html.escape(target))
+    return "❌ 规则写入失败：%s" % html.escape(_reason(out2))
+
+
+def op_gfwl_import_set(url):
+    """Import domains from ruleset URL into GFWList."""
+    ok, out = run2(["python3", RULES_IMPORT, "--extract-domains", url], timeout=60)
+    if not ok:
+        return "❌ 导入失败：%s" % html.escape(out)
+    new_domains = [d.strip() for d in out.strip().splitlines() if d.strip()]
+    existing = set(_read_gfwlist_extra())
+    added = [d for d in new_domains if d and d not in existing]
+    skipped = len(new_domains) - len(added)
+    if not added:
+        return "⚠️ 没有新域名需要添加（%d 个已存在）" % len(new_domains)
+    all_domains = list(existing) + added
+    _write_gfwlist_extra(all_domains)
+    _save_gfwlist_ruleset(url)
+    ok2, _ = run2(["bash", MGMT, "--update-rules"], timeout=60)
+    msg = "✅ 导入完成：新增 %d 个域名" % len(added)
+    if skipped:
+        msg += "，跳过 %d 个已存在" % skipped
+    return msg
 
 
 def op_show_rules():
@@ -1218,7 +1352,6 @@ def op_del_rule(num):
 # --------------------------------------------------------------------------- #
 # Category -> exit policy map
 # --------------------------------------------------------------------------- #
-POLICY_PATH = "/etc/proxy-gateway/policy-map.conf"
 
 
 def _policy_map():
@@ -1538,15 +1671,21 @@ def op_gfwlist_del(domain):
 
 def gfwlist_menu():
     domains = _read_gfwlist_extra()
-    count = "（%d 个）" % len(domains) if domains else ""
-    return [
-        [{"text": "📋 查看列表%s" % count, "callback_data": "gfwl:show"}],
+    rulesets = _read_gfwlist_rulesets()
+    parts = ["%d 条内置" % _gfwl_count()]
+    if domains:
+        parts.append("%d 条额外" % len(domains))
+    if rulesets:
+        parts.append("%d 个规则集" % len(rulesets))
+    status = " · ".join(parts)
+    kb = [
+        [{"text": "📊 %s" % status, "callback_data": "gfwl:show"}],
         [{"text": "➕ 添加域名", "callback_data": "gfwl:add"},
-         {"text": "🗑 删除域名", "callback_data": "menu:gfwl_del"}],
+         {"text": "📥 从规则集导入", "callback_data": "gfwl:import_set"}],
+        [{"text": "🗑 删除域名", "callback_data": "menu:gfwl_del"}],
         [{"text": "« 返回", "callback_data": "menu:main"}],
     ]
-
-
+    return kb
 def gfwlist_del_menu():
     domains = _read_gfwlist_extra()
     rows = []
@@ -1590,17 +1729,24 @@ def firewall_menu():
 
 
 def rules_menu():
-    return [
+    cur = _read_file(os.path.join(_PROJECT_DIR, "runtime/current-exit")) or "local"
+    smart_mark = " ✅" if cur == "smart" else ""
+    summary = rules_summary()
+    kb = [
+        [{"text": "📊 %s" % summary, "callback_data": "rules:show"}],
+        [{"text": "🧩 快捷添加", "callback_data": "rules:quick_add"},
+         {"text": "📥 导入规则集", "callback_data": "rules:import_set"}],
         [{"text": "🎯 分类→出口映射", "callback_data": "menu:policy"}],
         [{"text": "📋 查看规则", "callback_data": "rules:show"},
          {"text": "✏️ 设置规则", "callback_data": "rules:set"}],
         [{"text": "➕ 添加一条", "callback_data": "rules:add"},
          {"text": "🗑 删除一条", "callback_data": "rules:del"}],
-        [{"text": "⚡ 启用智能分流", "callback_data": "rules:enable"}],
+        [{"text": "🔄 刷新规则集", "callback_data": "rules:refresh"},
+         {"text": "💡 预设模板", "callback_data": "rules:presets"}],
+        [{"text": "⚡ 启用 smart 出口%s" % smart_mark, "callback_data": "rules:enable"}],
         [{"text": "« 返回", "callback_data": "menu:main"}],
     ]
-
-
+    return kb
 def policy_menu():
     rows = []
     pm = _policy_map()
@@ -1788,6 +1934,34 @@ def handle_message(msg):
         send_async(chat_id, lambda: op_gfwlist_add(domain), keyboard_fn=gfwlist_menu)
         return
 
+    if state and state.get("action") == "rule_value":
+        domain = text.strip()
+        typ = state.get("type", "DOMAIN")
+        if not domain:
+            send(chat_id, "请输入域名、IP 或关键词。")
+            return
+        PENDING[chat_id] = {"action": "rule_target", "type": typ, "value": domain}
+        send(chat_id, "选择目标出口（%s → <code>%s</code>）：" % (html.escape(typ), html.escape(domain)),
+             rule_target_menu(typ, domain))
+        return
+    if state and state.get("action") == "rule_target":
+        send(chat_id, "已过期，请重新操作。", rules_menu())
+        PENDING.pop(chat_id, None)
+        return
+    if state and state.get("action") == "rule_import_url":
+        PENDING.pop(chat_id, None)
+        url = text.strip()
+        send(chat_id, "⏳ 正在下载并解析规则集…")
+        target = state.get("target", "Proxy")
+        send_async(chat_id, lambda: op_import_ruleset(url, target), keyboard_fn=rules_menu)
+        return
+    if state and state.get("action") == "gfwl_set_url":
+        PENDING.pop(chat_id, None)
+        url = text.strip()
+        send(chat_id, "⏳ 正在下载规则集并提取域名…")
+        send_async(chat_id, lambda: op_gfwl_import_set(url), keyboard_fn=gfwlist_menu)
+        return
+
     send(chat_id, "未知命令。发送 /menu 打开操作面板。")
 
 
@@ -1922,6 +2096,59 @@ def handle_callback(cb):
             edit_async(cb, lambda: op_firewall_del_port_key(port_key), keyboard=firewall_del_menu())
 
     # ---- GFWList actions ----
+    # ---- smart routing quick add ----
+    elif data == "rules:quick_add":
+        edit(cb, "选择规则类型：", rule_type_menu())
+    elif data == "rules:import_set":
+        PENDING[chat_id] = {"action": "rule_import_url"}
+        edit(cb,
+             "发送规则集 URL，支持：\n"
+             "• Clash rule-provider YAML\n"
+             "• Surge / Quantumult 列表\n"
+             "• sing-box .srs 文件\n"
+             "• 纯文本域名列表\n\n"
+             "发送 /cancel 取消。")
+    elif data == "rules:refresh":
+        edit(cb, "⏳ 正在刷新规则集…")
+        edit_async(cb, op_refresh_rulesets, back_kb("menu:rules"))
+    elif data == "rules:presets":
+        edit(cb, "选择一个预设模板：", presets_menu())
+    elif data.startswith("preset:"):
+        name = data[len("preset:"):]
+        text = PRESETS.get(name, "")
+        if text:
+            edit(cb, "⏳ 正在导入预设模板 <b>%s</b>…" % html.escape(name))
+            edit_async(cb, lambda: op_set_rules(_read_file(RULES_PATH).rstrip("\n") + "\n" + text + "\n"), keyboard=rules_menu)
+        else:
+            edit(cb, "未知模板。", rules_menu())
+    elif data.startswith("rt:"):
+        typ = data[len("rt:"):]
+        PENDING[chat_id] = {"action": "rule_value", "type": typ}
+        hint = {"DOMAIN": "完整域名，如 openai.com",
+                "DOMAIN-SUFFIX": "域名后缀，如 google.com（匹配 *.google.com）",
+                "DOMAIN-KEYWORD": "域名包含的关键词，如 netflix",
+                "IP-CIDR": "IP 段，如 1.2.3.0/24",
+                "GEOSITE": "地理站点分类，如 telegram, netflix",
+                "GEOIP": "国家代码，如 cn, us, jp"}.get(typ, "值")
+        edit(cb, "输入 %s 的%s：\n发送 /cancel 取消。" % (html.escape(typ), hint))
+    elif data.startswith("rta:"):
+        parts = data[4:].split(":", 2)
+        if len(parts) == 3:
+            typ, value, target = parts
+            rule = "%s,%s,%s" % (typ, value, target)
+            edit(cb, "⏳ 正在添加规则…")
+            edit_async(cb, lambda: op_add_rule(rule), back_kb("menu:rules"))
+        else:
+            edit(cb, "参数错误，请重试。", rules_menu())
+    elif data == "gfwl:import_set":
+        PENDING[chat_id] = {"action": "gfwl_set_url"}
+        edit(cb,
+             "发送规则集 URL，会自动提取域名并合并到 GFWList：\n"
+             "• Clash / Surge 规则\n"
+             "• 纯文本域名列表\n"
+             "• sing-box .srs\n\n"
+             "已存在的域名会自动跳过。\n发送 /cancel 取消。")
+
     elif data == "gfwl:show":
         edit(cb, op_gfwlist_show(), gfwlist_menu())
     elif data.startswith("gfwl_del:"):
