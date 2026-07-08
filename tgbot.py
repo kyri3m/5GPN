@@ -1178,6 +1178,45 @@ def _rule_entries():
     return lines, entries
 
 
+def _final_target():
+    """Read FINAL target from rules.conf."""
+    txt = _read_file(RULES_PATH)
+    for line in txt.splitlines():
+        s = line.strip()
+        if s.upper().startswith("FINAL,"):
+            parts = [p.strip() for p in s.split(",", 1)]
+            return parts[1] if len(parts) > 1 else None
+    return None
+
+
+def final_target_menu():
+    """Menu to select FINAL target — same as exit list but for the default route."""
+    rows = []
+    for e in _targets():
+        rows.append([{"text": "➡ " + e, "callback_data": "fin:%s" % e}])
+    rows.append([{"text": "🌍 直连", "callback_data": "fin:direct"},
+                 {"text": "🚫 拒绝", "callback_data": "fin:block"}])
+    rows.append([{"text": "« 返回", "callback_data": "menu:rules"}])
+    return rows
+
+
+def op_set_final(target):
+    """Set the FINAL (default) rule in rules.conf."""
+    lines = []
+    txt = _read_file(RULES_PATH)
+    replaced = False
+    for line in txt.splitlines():
+        s = line.strip()
+        if s.upper().startswith("FINAL,"):
+            lines.append("FINAL,%s" % target)
+            replaced = True
+        elif s:
+            lines.append(s)
+    if not replaced:
+        lines.append("FINAL,%s" % target)
+    return op_set_rules("\n".join(lines) + "\n")
+
+
 def rules_summary():
     """Generate summary line for rules panel."""
     _, entries = _rule_entries()
@@ -1321,7 +1360,7 @@ def op_set_rules(text):
     ok, out = run2(["bash", MGMT, "--set-rules"], inp=text, timeout=180)
     if ok:
         m = re.search(r"\((\d+) rules\)", out)
-        return ("✅ <b>分流规则已更新</b>（%s 条）\n用「⚡ 启用智能分流」或在 🌐 出口 选 smart 生效。"
+        return ("✅ <b>分流规则已更新</b>（%s 条）\n用「⚡ 启用分流」或在 🌐 出口 选 smart 生效。"
                 % (m.group(1) if m else "?"))
     return "❌ <b>规则设置失败</b>\n%s" % html.escape(_reason(out))
 
@@ -1704,7 +1743,7 @@ def main_menu():
     return [
         [{"text": "📊 状态", "callback_data": "act:status"},
          {"text": "🌐 出口", "callback_data": "menu:exits"}],
-        [{"text": "🧭 智能分流", "callback_data": "menu:rules"},
+        [{"text": "🧭 分流", "callback_data": "menu:rules"},
          {"text": "🔄 更新规则", "callback_data": "act:update_rules"}],
         [{"text": "🔐 DoT 管理", "callback_data": "menu:dot"},
          {"text": "♻️ 重启服务", "callback_data": "act:restart"}],
@@ -1732,19 +1771,21 @@ def rules_menu():
     cur = _read_file(os.path.join(_PROJECT_DIR, "runtime/current-exit")) or "local"
     smart_mark = " ✅" if cur == "smart" else ""
     summary = rules_summary()
+    final_target = _final_target()
+    if final_target:
+        summary += " · 兜底: %s" % final_target
     kb = [
         [{"text": "📊 %s" % summary, "callback_data": "rules:show"}],
-        [{"text": "🧩 快捷添加", "callback_data": "rules:quick_add"},
-         {"text": "📥 导入规则集", "callback_data": "rules:import_set"}],
-        [{"text": "🎯 分类→出口映射", "callback_data": "menu:policy"}],
-        [{"text": "📋 查看规则", "callback_data": "rules:show"},
-         {"text": "✏️ 设置规则", "callback_data": "rules:set"}],
-        [{"text": "➕ 添加一条", "callback_data": "rules:add"},
+        [{"text": "🧩 添加快捷规则", "callback_data": "rules:quick_add"}],
+        [{"text": "📥 从 URL 导入规则集", "callback_data": "rules:import_set"}],
+        [{"text": "💡 预设模板", "callback_data": "rules:presets"}],
+        [{"text": "📋 查看全部规则", "callback_data": "rules:show"},
          {"text": "🗑 删除一条", "callback_data": "rules:del"}],
-        [{"text": "🔄 刷新规则集", "callback_data": "rules:refresh"},
-         {"text": "💡 预设模板", "callback_data": "rules:presets"}],
+        [{"text": "🎯 分类→出口", "callback_data": "menu:policy"},
+         {"text": "↗️ 设置兜底规则", "callback_data": "rules:set_final"}],
+        [{"text": "🔄 刷新外部规则集", "callback_data": "rules:refresh"}],
         [{"text": "⚡ 启用 smart 出口%s" % smart_mark, "callback_data": "rules:enable"}],
-        [{"text": "« 返回", "callback_data": "menu:main"}],
+        [{"text": "« 返回主菜单", "callback_data": "menu:main"}],
     ]
     return kb
 def policy_menu():
@@ -1851,7 +1892,7 @@ def handle_message(msg):
         elif text.startswith("/exits"):
             send_async(chat_id, exits_overview_text, keyboard_fn=exits_menu)
         elif text.startswith("/rules"):
-            send(chat_id, "🧭 <b>智能分流</b>：按域名分流到不同出口 / 直连 / 拒绝。", rules_menu())
+            send(chat_id, "🧭 <b>分流</b>", rules_menu())
         elif text.startswith("/fw") or text.startswith("/firewall"):
             send_async(chat_id, op_firewall_status, keyboard_fn=firewall_menu)
         else:
@@ -1986,7 +2027,7 @@ def handle_callback(cb):
         PENDING.pop(chat_id, None)
         edit(cb, "选择一个操作：", main_menu())
     elif data == "menu:rules":
-        edit(cb, "🧭 <b>智能分流</b>：按域名把代理流量分到不同出口 / 直连 / 拒绝。", rules_menu())
+        edit(cb, "🧭 <b>分流</b>", rules_menu())
     elif data == "menu:policy":
         edit(cb, "🎯 <b>分类 → 出口</b> 映射（点一个分类来修改目标）：", policy_menu())
     elif data == "menu:exits":
@@ -2179,8 +2220,14 @@ def handle_callback(cb):
     elif data == "act:restart":
         edit(cb, "⏳ 正在重启服务…")
         edit_async(cb, op_restart_services, back_kb("menu:main"))
+    elif data == "rules:set_final":
+        edit(cb, "选择兜底规则（未匹配规则的默认出口）：", final_target_menu())
+    elif data.startswith("fin:"):
+        target = data[len("fin:"):]
+        edit(cb, "⏳ 正在设置兜底规则 → <b>%s</b>…" % html.escape(target))
+        edit_async(cb, lambda: op_set_final(target), keyboard=rules_menu)
     elif data == "rules:enable":
-        edit(cb, "⏳ 正在启用智能分流…")
+        edit(cb, "⏳ 正在启用 smart 分流…")
         edit_async(cb, lambda: op_set_exit("smart"), back_kb("menu:rules"))
     elif data.startswith("exit:"):
         name = data[len("exit:"):]
@@ -2226,7 +2273,7 @@ BOT_COMMANDS = [
     ("menu", "打开操作面板"),
     ("status", "查看运行状态"),
     ("exits", "出口管理（切换/添加/删除）"),
-    ("rules", "智能分流规则"),
+    ("rules", "分流规则"),
     ("firewall", "防火墙管理（端口放行/关闭/备注）"),
     ("cancel", "取消当前操作"),
     ("id", "获取我的 Telegram ID"),
