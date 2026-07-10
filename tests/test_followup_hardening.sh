@@ -21,6 +21,17 @@ python3 - "$tmp/out" <<'PY'
 import sys,yaml
 c=yaml.safe_load(open(sys.argv[1])); assert 'DOMAIN-SUFFIX,example.com,HK' in c['rules']
 PY
+# URL resolution must be single-shot so validated and connected addresses are identical.
+python3 - "$root/rules-import.py" <<'PY'
+import importlib.util, socket, sys
+s=importlib.util.spec_from_file_location('ri',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m)
+calls=[]
+def fake(*a,**k):
+ calls.append(1); return [(socket.AF_INET,socket.SOCK_STREAM,6,'',('93.184.216.34',443))]
+m.socket.getaddrinfo=fake
+p,addrs=m.resolve_public_url('https://example.com/x')
+assert addrs==['93.184.216.34'] and len(calls)==1
+PY
 # Callback payloads must remain <= Telegram's 64-byte limit.
 python3 - "$root/tgbot.py" <<'PY'
 import ast,sys
@@ -29,9 +40,14 @@ assert 'value' not in ast.unparse(f).split('callback_data')[1], 'rule value stil
 PY
 body=$(cat "$root/install.sh"); dns=$(cat "$root/update-rules.sh")
 [[ "$body" == *'SMART_LOCK_FILE='* && "$body" == *'flock '* ]] || { echo no-smart-lock; exit 1; }
+proxy_body="${body#*proxy_domain() \{}"; proxy_body="${proxy_body%%show_rules()*}"
+[[ "$proxy_body" == *'acquire_smart_lock'* && "$proxy_body" == *'restore_smart_state'* && "$proxy_body" == *'update-dnsdist-rules.sh'* ]] || { echo proxy-domain-not-transactional; exit 1; }
 [[ "$body" == *'MIHOMO_SHA256_'* && "$body" == *'sha256sum -c'* ]] || { echo no-mihomo-checksum; exit 1; }
 [[ "$dns" == *'os.replace('* ]] || { echo dns-not-atomic; exit 1; }
 for f in proxy-gateway-mihomo@.service proxy-gateway-tgbot.service quic-proxy.service china-dns-race-proxy.service; do
   grep -q '@BASE_DIR@' "$root/deploy/systemd/$f" || { echo "unrendered-template-missing:$f"; exit 1; }
 done
+rendered="$tmp/rendered"; bash "$root/deploy/systemd/install.sh" /opt/custom-5gpn "$rendered"
+! grep -R -q '@BASE_DIR@' "$rendered"
+grep -q '/opt/custom-5gpn/bin/mihomo' "$rendered/proxy-gateway-mihomo@.service"
 echo followup-hardening-OK

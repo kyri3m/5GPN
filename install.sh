@@ -2610,33 +2610,39 @@ rename_policy() {
 # One-click: route a single domain to a target, handling BOTH layers —
 # hijack it into the gateway (GFWList) AND add a top-priority smart rule.
 proxy_domain() {
-    local domain="${1:-}" target="${2:-}"
-    [[ -z "$domain" || -z "$target" ]] && { err "Usage: $0 --proxy-domain <domain> <exit|direct|block>"; exit 1; }
-    [[ "$domain" =~ ^[a-z0-9.-]+$ && "$domain" == *.* ]] || { err "Invalid domain"; exit 1; }
+    local domain="${1:-}" target="${2:-}" snapshot extra extra_backup="" rules_candidate extra_candidate
+    acquire_smart_lock || return 1
+    [[ -z "$domain" || -z "$target" ]] && { err "Usage: $0 --proxy-domain <domain> <exit|direct|block>"; return 1; }
+    [[ "$domain" =~ ^[a-z0-9.-]+$ && "$domain" == *.* ]] || { err "Invalid domain"; return 1; }
     case "$target" in
         direct|block) ;;
-        *) exit_exists "$target" || { err "Unknown target '$target' (exit name / direct / block)"; exit 1; } ;;
+        *) exit_exists "$target" || { err "Unknown target '$target' (exit name / direct / block)"; return 1; } ;;
     esac
-    mkdir -p "${EXITS_DIR}"; touch "${RULES_FILE}"
+    mkdir -p "${EXITS_DIR}" /etc/dnsdist; touch "${RULES_FILE}"
+    snapshot="$(mktemp -d)"; snapshot_smart_state "$snapshot"
+    extra="/etc/dnsdist/gfwlist-extra-local.txt"
+    [[ -f "$extra" ]] && { extra_backup="$(mktemp)"; cp -a "$extra" "$extra_backup"; }
+    rules_candidate="$(mktemp)"; extra_candidate="$(mktemp)"
     local esc="${domain//./\\.}" rule="DOMAIN-SUFFIX,${domain},${target}"
-    # 1) smart rule, top priority (replace any prior rule for the same domain)
-    grep -vE "^DOMAIN-SUFFIX,${esc}," "${RULES_FILE}" > "${RULES_FILE}.tmp" 2>/dev/null || true
-    { echo "$rule"; cat "${RULES_FILE}.tmp"; } > "${RULES_FILE}"; rm -f "${RULES_FILE}.tmp"
-    # 2) hijack layer
-    local extra="/etc/dnsdist/gfwlist-extra-local.txt" lua="/etc/dnsdist/gfwlist.lua"
-    mkdir -p /etc/dnsdist; touch "$extra"
+    grep -vE "^DOMAIN-SUFFIX,${esc}," "${RULES_FILE}" > "${rules_candidate}.rest" 2>/dev/null || true
+    { echo "$rule"; cat "${rules_candidate}.rest"; } > "$rules_candidate"
     if [[ "$target" == "direct" ]]; then
-        grep -vxF "$domain" "$extra" > "$extra.tmp" 2>/dev/null || true; mv "$extra.tmp" "$extra"
-        [[ -f "$lua" ]] && sed -i "/newDNSName(\"${esc}\")/d" "$lua"
+        grep -vxF "$domain" "$extra" > "$extra_candidate" 2>/dev/null || true
     else
-        grep -qxF "$domain" "$extra" || echo "$domain" >> "$extra"
-        if [[ -f "$lua" ]] && ! grep -q "newDNSName(\"${esc}\")" "$lua"; then
-            echo "gfwList:add(newDNSName(\"${domain}\"))" >> "$lua"
-        fi
+        { cat "$extra" 2>/dev/null || true; echo "$domain"; } | awk 'NF&&!seen[$0]++' > "$extra_candidate"
     fi
-    systemctl restart dnsdist 2>/dev/null || true   # dnsdist can't hot-reload; restart applies config
+    atomic_install "$rules_candidate" "$RULES_FILE" 0644
+    atomic_install "$extra_candidate" "$extra" 0644
+    if ! /usr/local/bin/update-dnsdist-rules.sh || ! (regen_smart); then
+        restore_smart_state "$snapshot"
+        if [[ -n "$extra_backup" ]]; then install -m 0644 "$extra_backup" "$extra"; else rm -f "$extra"; fi
+        /usr/local/bin/update-dnsdist-rules.sh >/dev/null 2>&1 || true
+        systemctl restart proxy-gateway-mihomo@smart.service 2>/dev/null || true
+        rm -rf "$snapshot" "$extra_backup" "$rules_candidate" "${rules_candidate}.rest" "$extra_candidate"
+        err "Domain routing update failed; DNS and smart state rolled back"; return 1
+    fi
+    rm -rf "$snapshot" "$extra_backup" "$rules_candidate" "${rules_candidate}.rest" "$extra_candidate"
     ok "Domain '${domain}' -> ${target}  (hijack: $([[ "$target" == direct ]] && echo off || echo on))"
-    regen_smart
 }
 
 show_rules() {

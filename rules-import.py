@@ -32,8 +32,7 @@ DOMAIN_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?(\.[A-Za-z0-9](
 MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
 
 
-def validate_remote_url(url):
-    """Allow only HTTPS URLs whose hostname resolves exclusively to public IPs."""
+def _parse_remote_url(url):
     try:
         parsed = urlsplit(url)
     except ValueError as exc:
@@ -42,17 +41,30 @@ def validate_remote_url(url):
         raise ValueError("only https:// rule URLs are allowed")
     if not parsed.hostname or parsed.username or parsed.password:
         raise ValueError("rule URL must contain a hostname and no credentials")
+    return parsed
+
+
+def resolve_public_url(url):
+    """Resolve exactly once; return the same validated addresses used to connect."""
+    parsed = _parse_remote_url(url)
     try:
         infos = socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)
     except OSError as exc:
         raise ValueError("cannot resolve rule URL hostname") from exc
-    addresses = {item[4][0] for item in infos}
+    addresses = []
+    for item in infos:
+        address = item[4][0]
+        if not ipaddress.ip_address(address).is_global:
+            raise ValueError("private or non-global rule URL address is not allowed")
+        if address not in addresses:
+            addresses.append(address)
     if not addresses:
         raise ValueError("rule URL hostname has no addresses")
-    for address in addresses:
-        ip = ipaddress.ip_address(address)
-        if not ip.is_global:
-            raise ValueError("private or non-global rule URL address is not allowed")
+    return parsed, addresses
+
+
+def validate_remote_url(url):
+    resolve_public_url(url)
     return url
 
 
@@ -66,18 +78,6 @@ class PinnedHTTPSConnection(http.client.HTTPSConnection):
     def connect(self):
         raw = socket.create_connection((self._address, self.port), self.timeout)
         self.sock = self._tls_context.wrap_socket(raw, server_hostname=self.host)
-
-
-def resolve_public_url(url):
-    validate_remote_url(url)
-    parsed = urlsplit(url)
-    infos = socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)
-    addresses = []
-    for info in infos:
-        address = info[4][0]
-        if address not in addresses:
-            addresses.append(address)
-    return parsed, addresses
 
 
 def csv_split(s):
