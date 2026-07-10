@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/root/5GPN/bin/mihomo -d /etc/proxy-gateway/exits -f /etc/proxy-gateway/exits/%i.yaml
+ExecStart=@BASE_DIR@/bin/mihomo -d /etc/proxy-gateway/exits -f /etc/proxy-gateway/exits/%i.yaml
 ExecStartPost=-/usr/local/bin/proxy-gateway-apply-exit.sh
 Restart=on-failure
 RestartSec=5

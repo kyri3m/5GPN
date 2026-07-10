@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=/root/5GPN/runtime/tgbot.env
-ExecStart=/usr/bin/python3 /root/5GPN/tgbot.py
+EnvironmentFile=@BASE_DIR@/runtime/tgbot.env
+ExecStart=/usr/bin/python3 @BASE_DIR@/tgbot.py
 Restart=on-failure
 RestartSec=5
 User=root

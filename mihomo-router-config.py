@@ -24,11 +24,15 @@ Env: EXITS_DIR, WG_DIR, MIHOMO_STACK, MIHOMO_MTU
 """
 
 import hashlib
+import importlib.util
+import ipaddress
 import json
 import os
 import re
+import socket
 import sys
 import urllib.request
+from urllib.parse import urlsplit
 from typing import NoReturn
 import yaml
 
@@ -40,6 +44,7 @@ try:
 except ValueError:
     MTU = 1400
 POLICY_MAP_FILE = os.environ.get("PGW_POLICY_MAP", "/etc/proxy-gateway/policy-map.conf")
+RULESET_CACHE = os.environ.get("PGW_RULESET_CACHE", "/etc/proxy-gateway/rulesets")
 DEFAULT_TARGET = os.environ.get("PGW_DEFAULT_TARGET", "direct")
 GEOSITE_URL = "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat"
 GEOIP_URL = "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geoip.dat"
@@ -223,6 +228,57 @@ def load_exit_proxy(name):
     return None
 
 
+def canonical_exit_name(name):
+    """Return the on-disk exit spelling, or the original name if absent."""
+    wanted = name.lower()
+    try:
+        for entry in os.listdir(EXITS_DIR):
+            stem, ext = os.path.splitext(entry)
+            if ext in (".yaml", ".json", ".type") and stem.lower() == wanted:
+                return stem
+    except OSError:
+        pass
+    return name
+
+
+def validate_provider_url(value, line):
+    parsed = urlsplit(value)
+    if parsed.scheme.lower() != "https" or not parsed.hostname or parsed.username or parsed.password:
+        die("line %d: remote rule providers must use credential-free HTTPS" % line)
+    try:
+        infos = socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)
+    except OSError:
+        die("line %d: cannot resolve remote rule-provider host" % line)
+    if not infos:
+        die("line %d: remote rule-provider host has no addresses" % line)
+    for info in infos:
+        if not ipaddress.ip_address(info[4][0]).is_global:
+            die("line %d: private or non-global rule-provider address is not allowed" % line)
+
+
+def cache_remote_provider(value, tag, line):
+    """Fetch through the pinned-IP downloader; mihomo only reads a local file."""
+    helper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rules-import.py")
+    spec = importlib.util.spec_from_file_location("pgw_rules_import", helper)
+    if not spec or not spec.loader:
+        die("line %d: secure rule downloader is unavailable" % line)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    try:
+        data = module.fetch(value)
+    except Exception as exc:
+        die("line %d: secure rule-provider fetch failed: %s" % (line, exc))
+    os.makedirs(RULESET_CACHE, mode=0o755, exist_ok=True)
+    path = os.path.join(RULESET_CACHE, tag + ".rules")
+    tmp = path + ".tmp.%d" % os.getpid()
+    with open(tmp, "wb") as f:
+        f.write(data); f.flush(); os.fsync(f.fileno())
+    os.chmod(tmp, 0o644); os.replace(tmp, path)
+    text = data[:262144].decode("utf-8", "ignore")
+    classical = re.search(r"(?mi)^\s*(?:-\s*)?[\"']?(?:DOMAIN|DOMAIN-SUFFIX|DOMAIN-KEYWORD|IP-CIDR|IP-CIDR6|GEOIP|GEOSITE),", text)
+    return path, ("classical" if classical else "domain")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -259,9 +315,11 @@ def main():
                 return "DIRECT"
             if tlow in ("block", "reject", "reject-drop"):
                 return "REJECT"
+            target = canonical_exit_name(target)
             used_exits.add(target)
             return target
         # Direct exit name: add to used_exits, return as-is for rules
+        t = canonical_exit_name(t)
         used_exits.add(t)
         return t
 
@@ -298,11 +356,12 @@ def main():
             if value.lower().split("?", 1)[0].endswith(".srs"):
                 die("line %d: sing-box .srs is not a mihomo rule-provider format; use YAML/text" % ln)
             if value.lower().startswith("https://"):
+                validate_provider_url(value, ln)
+                cached, behavior = cache_remote_provider(value, tag, ln)
                 rule_providers[tag] = {
-                    "type": "http",
-                    "url": value,
-                    "interval": RULE_PROVIDER_INTERVAL,
-                    "behavior": "classical" if value.endswith(".yaml") else "domain",
+                    "type": "file",
+                    "path": cached,
+                    "behavior": behavior,
                 }
             elif re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", value):
                 die("line %d: remote rule providers must use HTTPS" % ln)

@@ -32,11 +32,15 @@ KEEP_FILE="/etc/proxy-gateway/keep-categories"
 DIRECT_FILE="/etc/proxy-gateway/direct-categories"
 RULES_DEFAULT="/etc/proxy-gateway/rules-default.conf"
 RULESET_CACHE="/etc/proxy-gateway/rulesets"
+SMART_LOCK_FILE="/run/lock/proxy-gateway-smart.lock"
+SMART_LOCK_HELD=0
 MIHOMO_BIN="${BASE_DIR}/bin/mihomo"
 MIHOMO_CFG_GEN="${BASE_DIR}/bin/mihomo-exit-config.py"
 MIHOMO_ROUTER_GEN="${BASE_DIR}/bin/mihomo-router-config.py"
 RULES_IMPORT="${BASE_DIR}/bin/rules-import.py"
 MIHOMO_VERSION_DEFAULT="1.19.4"
+MIHOMO_SHA256_AMD64="e3e4174bf0cba26b36ca524bb75ab3f6b91b05741c274161ac6f70b6d085d2ba"
+MIHOMO_SHA256_ARM64="7236aa97868ebafa9f92969dae48f23f110c873e20bf739e37daac5abbdb685a"
 DEFAULT_REMOTE_DNS=("1.1.1.1" "8.8.8.8")
 DEFAULT_LOCAL_DNS=("223.5.5.5" "119.29.29.29")
 
@@ -1841,18 +1845,29 @@ list_exit_names() {
 ensure_mihomo() {
     [[ -x "${MIHOMO_BIN}" ]] && return 0
     info "Installing locked mihomo ${MIHOMO_VERSION_DEFAULT} (TUN engine for URI exits)..."
-    local ver arch tmp url
+    local ver arch tmp url expected
     ver="${MIHOMO_VERSION:-${MIHOMO_VERSION_DEFAULT}}"
     case "$(uname -m)" in
         x86_64) arch=amd64 ;;
         aarch64|arm64) arch=arm64 ;;
         *) err "Unsupported architecture for mihomo: $(uname -m)"; return 1 ;;
     esac
+    if [[ "$ver" != "${MIHOMO_VERSION_DEFAULT}" ]]; then
+        [[ -n "${MIHOMO_SHA256:-}" ]] || { err "Custom MIHOMO_VERSION requires MIHOMO_SHA256"; return 1; }
+        expected="${MIHOMO_SHA256}"
+    elif [[ "$arch" == amd64 ]]; then
+        expected="${MIHOMO_SHA256_AMD64}"
+    else
+        expected="${MIHOMO_SHA256_ARM64}"
+    fi
     url="https://github.com/MetaCubeX/mihomo/releases/download/v${ver}/mihomo-linux-${arch}-v${ver}.gz"
     tmp="$(mktemp -d)"
     if ! curl -fsSL --max-time 90 "$url" -o "$tmp/mihomo.gz"; then
-        rm -rf "$tmp"; err "Failed to download mihomo ${ver}. Set MIHOMO_VERSION=<ver> and retry. URL: $url"; return 1
+        rm -rf "$tmp"; err "Failed to download mihomo ${ver}. Set MIHOMO_VERSION=<ver> and MIHOMO_SHA256=<sha256> to override. URL: $url"; return 1
     fi
+    printf '%s  %s\n' "$expected" "$tmp/mihomo.gz" | sha256sum -c - >/dev/null || {
+        rm -rf "$tmp"; err "mihomo archive SHA-256 mismatch"; return 1;
+    }
     if ! gzip -dc "$tmp/mihomo.gz" > "$tmp/mihomo"; then
         rm -rf "$tmp"; err "Failed to extract mihomo archive"; return 1
     fi
@@ -2309,6 +2324,52 @@ set_exit() {
     info "  curl --interface ${iface} -4 -s https://api.ipify.org; echo"
 }
 
+# Serialize every smart-rules mutation across CLI and Bot processes.
+acquire_smart_lock() {
+    [[ "${SMART_LOCK_HELD}" == 1 ]] && return 0
+    mkdir -p "$(dirname "${SMART_LOCK_FILE}")"
+    exec 8>"${SMART_LOCK_FILE}"
+    flock -w 30 8 || { err "Another smart-rules update is running"; return 1; }
+    SMART_LOCK_HELD=1
+}
+
+snapshot_smart_state() {
+    local d="$1" f key
+    mkdir -p "$d"
+    for f in "${RULES_FILE}" "${POLICY_MAP}" "$(exit_mihomo_conf smart)" "$(exit_type_file smart)"; do
+        key="$(printf '%s' "$f" | sha256sum | cut -d' ' -f1)"
+        if [[ -e "$f" ]]; then cp -a "$f" "$d/$key"; printf '%s\n' "$f" > "$d/$key.path"; fi
+    done
+}
+
+restore_smart_state() {
+    local d="$1" f key seen=""
+    for f in "${RULES_FILE}" "${POLICY_MAP}" "$(exit_mihomo_conf smart)" "$(exit_type_file smart)"; do
+        key="$(printf '%s' "$f" | sha256sum | cut -d' ' -f1)"
+        if [[ -f "$d/$key.path" ]]; then
+            mkdir -p "$(dirname "$f")"; install -m "$(stat -c %a "$d/$key")" "$d/$key" "$f"
+        else
+            rm -f "$f"
+        fi
+    done
+}
+
+atomic_install() {
+    local src="$1" dst="$2" mode="$3"
+    python3 - "$src" "$dst" "$mode" <<'PY'
+import os, shutil, sys, tempfile
+src, dst, mode = sys.argv[1], sys.argv[2], int(sys.argv[3], 8)
+os.makedirs(os.path.dirname(dst), exist_ok=True)
+fd, tmp = tempfile.mkstemp(prefix='.pgw-', dir=os.path.dirname(dst))
+try:
+    with os.fdopen(fd, 'wb') as out, open(src, 'rb') as inp:
+        shutil.copyfileobj(inp, out); out.flush(); os.fsync(out.fileno())
+    os.chmod(tmp, mode); os.replace(tmp, dst)
+finally:
+    if os.path.exists(tmp): os.unlink(tmp)
+PY
+}
+
 # Build and validate a mihomo smart config from candidate rules and policy files.
 build_smart_candidate() {
     local rules_source="$1" output="$2" policy_source="${3:-${POLICY_MAP}}"
@@ -2337,7 +2398,8 @@ build_smart_candidate() {
 
 # Regenerate the live smart config from already-committed rules.
 regen_smart() {
-    [[ -f "${RULES_FILE}" ]] || { err "No rules yet. Use --set-rules or --import-rules first."; exit 1; }
+    acquire_smart_lock || return 1
+    [[ -f "${RULES_FILE}" ]] || { err "No rules yet. Use --set-rules or --import-rules first."; return 1; }
     local yaml candidate backup="" cur="local"
     yaml="$(exit_mihomo_conf smart)"; candidate="$(mktemp)"
     build_smart_candidate "${RULES_FILE}" "$candidate" "${POLICY_MAP}" || { rm -f "$candidate"; exit 1; }
@@ -2367,6 +2429,7 @@ regen_smart() {
 # Validate rules, policy map and generated config before atomically committing them.
 set_rules() {
     local src="${1:-}" candidate_rules candidate_policy candidate_yaml
+    acquire_smart_lock || return 1
     ensure_proxy_user
     mkdir -p "${EXITS_DIR}" "${RULESET_CACHE}"
     candidate_rules="$(mktemp)"; candidate_policy="$(mktemp)"; candidate_yaml="$(mktemp)"
@@ -2385,28 +2448,31 @@ set_rules() {
     init_policy_map "$candidate_rules" "$candidate_policy"
     build_smart_candidate "$candidate_rules" "$candidate_yaml" "$candidate_policy" || return 1
 
-    local yaml rules_backup="" policy_backup="" yaml_backup="" cur="local"
+    local yaml snapshot cur="local"
     yaml="$(exit_mihomo_conf smart)"
-    [[ -f "${RULES_FILE}" ]] && { rules_backup="$(mktemp)"; cp -a "${RULES_FILE}" "$rules_backup"; }
-    [[ -f "${POLICY_MAP}" ]] && { policy_backup="$(mktemp)"; cp -a "${POLICY_MAP}" "$policy_backup"; }
-    [[ -f "$yaml" ]] && { yaml_backup="$(mktemp)"; cp -a "$yaml" "$yaml_backup"; }
+    snapshot="$(mktemp -d)"; snapshot_smart_state "$snapshot"
 
-    install -m 644 "$candidate_rules" "${RULES_FILE}"
-    install -m 644 "$candidate_policy" "${POLICY_MAP}"
-    install -m 600 "$candidate_yaml" "$yaml"
-    echo router > "$(exit_type_file smart)"
+    if ! {
+        atomic_install "$candidate_rules" "${RULES_FILE}" 0644 &&
+        atomic_install "$candidate_policy" "${POLICY_MAP}" 0644 &&
+        atomic_install "$candidate_yaml" "$yaml" 0600 &&
+        printf 'router\n' > "$(exit_type_file smart).tmp" &&
+        mv "$(exit_type_file smart).tmp" "$(exit_type_file smart)"
+    }; then
+        restore_smart_state "$snapshot"; rm -rf "$snapshot"
+        err "Failed to commit smart state; all files rolled back"
+        return 1
+    fi
 
     [[ -f "${CONF_DIR}/current-exit" ]] && cur="$(cat "${CONF_DIR}/current-exit" 2>/dev/null || echo local)"
     if [[ "$cur" == "smart" ]] && ! systemctl restart "proxy-gateway-mihomo@smart.service"; then
-        [[ -n "$rules_backup" ]] && install -m 644 "$rules_backup" "${RULES_FILE}"
-        [[ -n "$policy_backup" ]] && install -m 644 "$policy_backup" "${POLICY_MAP}"
-        [[ -n "$yaml_backup" ]] && install -m 600 "$yaml_backup" "$yaml"
+        restore_smart_state "$snapshot"
         systemctl restart "proxy-gateway-mihomo@smart.service" 2>/dev/null || true
-        rm -f "$rules_backup" "$policy_backup" "$yaml_backup"
+        rm -rf "$snapshot"
         err "Failed to reload smart router; rules and config rolled back"
         return 1
     fi
-    rm -f "$rules_backup" "$policy_backup" "$yaml_backup"
+    rm -rf "$snapshot"
     local n; n="$(grep -cvE '^[[:space:]]*(#|;|$)' "${RULES_FILE}" 2>/dev/null || echo 0)"
     ok "Smart router rebuilt (${n} rules)."
 }
@@ -2476,20 +2542,24 @@ init_policy_map() {
 }
 
 set_policy() {
-    local cat="${1:-}" target="${2:-}"
-    [[ -z "$cat" || -z "$target" ]] && { err "Usage: $0 --set-policy <category> <exit|direct|block>"; exit 1; }
-    # Validate target.
+    local cat="${1:-}" target="${2:-}" snapshot
+    acquire_smart_lock || return 1
+    [[ -z "$cat" || -z "$target" ]] && { err "Usage: $0 --set-policy <category> <exit|direct|block>"; return 1; }
     case "$target" in
         direct|block) ;;
-        *) exit_exists "$target" || { err "Unknown target '$target' (use an exit name, direct, or block)"; exit 1; } ;;
+        *) exit_exists "$target" || { err "Unknown target '$target' (use an exit name, direct, or block)"; return 1; } ;;
     esac
+    snapshot="$(mktemp -d)"; snapshot_smart_state "$snapshot"
     mkdir -p "$(dirname "${POLICY_MAP}")"; touch "${POLICY_MAP}"
-    # Remove existing mapping for this category, then add the new one.
     grep -vF "${cat}=" "${POLICY_MAP}" > "${POLICY_MAP}.tmp" 2>/dev/null || true
     mv "${POLICY_MAP}.tmp" "${POLICY_MAP}"
     printf '%s=%s\n' "$cat" "$target" >> "${POLICY_MAP}"
     ok "Mapped category '$cat' -> $target"
-    regen_smart
+    if ! (regen_smart); then
+        restore_smart_state "$snapshot"; rm -rf "$snapshot"
+        err "Policy update failed; state rolled back"; return 1
+    fi
+    rm -rf "$snapshot"
 }
 
 show_policy() {
@@ -2503,20 +2573,25 @@ show_policy() {
 # Remove a category (rule group) from the policy map. Rules still targeting it
 # fall back to the router's default (direct) until re-mapped or edited.
 del_policy() {
-    local cat="${1:-}"
-    [[ -z "$cat" ]] && { err "Usage: $0 --del-policy <category>"; exit 1; }
-    [[ -f "${POLICY_MAP}" ]] || { err "No policy map yet."; exit 1; }
+    local cat="${1:-}" snapshot
+    acquire_smart_lock || return 1
+    [[ -z "$cat" ]] && { err "Usage: $0 --del-policy <category>"; return 1; }
+    [[ -f "${POLICY_MAP}" ]] || { err "No policy map yet."; return 1; }
+    snapshot="$(mktemp -d)"; snapshot_smart_state "$snapshot"
     awk -F= -v c="$cat" '$1!=c' "${POLICY_MAP}" > "${POLICY_MAP}.tmp" && mv "${POLICY_MAP}.tmp" "${POLICY_MAP}"
     ok "Removed rule group '$cat'"
-    regen_smart
+    if ! (regen_smart); then restore_smart_state "$snapshot"; rm -rf "$snapshot"; err "Policy deletion rolled back"; return 1; fi
+    rm -rf "$snapshot"
 }
 
 # Rename a category (rule group): update the policy map key AND every rule whose
 # target is that category, then rebuild — all in one pass.
 rename_policy() {
-    local old="${1:-}" new="${2:-}"
-    [[ -z "$old" || -z "$new" ]] && { err "Usage: $0 --rename-policy <old> <new>"; exit 1; }
-    [[ "$new" =~ ^[A-Za-z0-9_-]+$ || "$new" =~ [^[:ascii:]] ]] || { err "Invalid new name"; exit 1; }
+    local old="${1:-}" new="${2:-}" snapshot
+    acquire_smart_lock || return 1
+    [[ -z "$old" || -z "$new" ]] && { err "Usage: $0 --rename-policy <old> <new>"; return 1; }
+    [[ "$new" =~ ^[A-Za-z0-9_-]+$ || "$new" =~ [^[:ascii:]] ]] || { err "Invalid new name"; return 1; }
+    snapshot="$(mktemp -d)"; snapshot_smart_state "$snapshot"
     if [[ -f "${POLICY_MAP}" ]]; then
         awk -F= -v o="$old" -v n="$new" 'BEGIN{OFS="="} $1==o{$1=n} {print}' "${POLICY_MAP}" > "${POLICY_MAP}.tmp" \
             && mv "${POLICY_MAP}.tmp" "${POLICY_MAP}"
@@ -2528,7 +2603,8 @@ rename_policy() {
         ' "${RULES_FILE}" > "${RULES_FILE}.tmp" && mv "${RULES_FILE}.tmp" "${RULES_FILE}"
     fi
     ok "Renamed rule group '$old' -> '$new'"
-    regen_smart
+    if ! (regen_smart); then restore_smart_state "$snapshot"; rm -rf "$snapshot"; err "Policy rename rolled back"; return 1; fi
+    rm -rf "$snapshot"
 }
 
 # One-click: route a single domain to a target, handling BOTH layers —

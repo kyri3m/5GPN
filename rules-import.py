@@ -13,12 +13,10 @@ import os
 import re
 import ssl
 import sys
-import hashlib
+import http.client
 import ipaddress
 import socket
-import urllib.request
-import urllib.error
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 # Matchers we can apply on the gateway (domain/IP/list based).
 KEEP = {"DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "IP-CIDR", "IP-CIDR6",
@@ -58,10 +56,28 @@ def validate_remote_url(url):
     return url
 
 
-class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        validate_remote_url(newurl)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+class PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """Connect to a pre-validated IP while preserving hostname TLS checks."""
+    def __init__(self, hostname, address, port, context, timeout):
+        super().__init__(hostname, port=port, context=context, timeout=timeout)
+        self._address = address
+        self._tls_context = context
+
+    def connect(self):
+        raw = socket.create_connection((self._address, self.port), self.timeout)
+        self.sock = self._tls_context.wrap_socket(raw, server_hostname=self.host)
+
+
+def resolve_public_url(url):
+    validate_remote_url(url)
+    parsed = urlsplit(url)
+    infos = socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)
+    addresses = []
+    for info in infos:
+        address = info[4][0]
+        if address not in addresses:
+            addresses.append(address)
+    return parsed, addresses
 
 
 def csv_split(s):
@@ -137,21 +153,54 @@ def emit(typ, value, category, sink):
 
 
 def fetch(url, max_bytes=None):
-    validate_remote_url(url)
     ctx = ssl.create_default_context()
-    req = urllib.request.Request(url, headers={"User-Agent": "proxy-gateway/1.0"})
-    opener = urllib.request.build_opener(
-        urllib.request.HTTPSHandler(context=ctx), SafeRedirectHandler())
-    with opener.open(req, timeout=10) as r:
+    for _redirect in range(6):
+        parsed, addresses = resolve_public_url(url)
+        conn = None
+        response = None
+        last_error = None
+        for address in addresses:
+            try:
+                conn = PinnedHTTPSConnection(parsed.hostname, address, parsed.port or 443, ctx, 10)
+                path = parsed.path or "/"
+                if parsed.query:
+                    path += "?" + parsed.query
+                host = parsed.hostname if parsed.port in (None, 443) else "%s:%d" % (parsed.hostname, parsed.port)
+                conn.request("GET", path, headers={"Host": host, "User-Agent": "proxy-gateway/1.0"})
+                response = conn.getresponse()
+                break
+            except OSError as exc:
+                last_error = exc
+                if conn:
+                    conn.close()
+                conn = None
+        if conn is None:
+            raise ValueError("cannot connect to validated rule URL address") from last_error
+        assert response is not None
+        if response.status in (301, 302, 303, 307, 308):
+            location = response.getheader("Location")
+            conn.close()
+            if not location:
+                raise ValueError("redirect missing Location header")
+            url = urljoin(url, location)
+            continue
+        if not 200 <= response.status < 300:
+            conn.close()
+            raise ValueError("rule URL returned HTTP %d" % response.status)
         if max_bytes is not None:
-            return r.read(min(max_bytes, MAX_DOWNLOAD_BYTES))
-        declared = r.headers.get("Content-Length")
+            data = response.read(min(max_bytes, MAX_DOWNLOAD_BYTES))
+            conn.close()
+            return data
+        declared = response.getheader("Content-Length")
         if declared and int(declared) > MAX_DOWNLOAD_BYTES:
+            conn.close()
             raise ValueError("rule file exceeds 20 MiB limit")
-        data = r.read(MAX_DOWNLOAD_BYTES + 1)
+        data = response.read(MAX_DOWNLOAD_BYTES + 1)
+        conn.close()
         if len(data) > MAX_DOWNLOAD_BYTES:
             raise ValueError("rule file exceeds 20 MiB limit")
         return data
+    raise ValueError("too many redirects")
 
 
 def detect_format(data, url=""):

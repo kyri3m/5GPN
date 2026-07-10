@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/root/5GPN/bin/quic-proxy -l 0.0.0.0:443
+ExecStart=@BASE_DIR@/bin/quic-proxy -l 0.0.0.0:443
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5

@@ -1250,11 +1250,13 @@ def rule_type_menu():
 
 
 def rule_target_menu(typ, value):
+    # The type/value live in PENDING; callback_data must stay below Telegram's
+    # 64-byte limit even for long domains and IPv6 CIDRs.
     rows = []
     for e in _targets():
-        rows.append([{"text": "➡ " + e, "callback_data": "rta:%s:%s:%s" % (typ, value, e)}])
-    rows.append([{"text": "🌍 直连", "callback_data": "rta:%s:%s:direct" % (typ, value)},
-                 {"text": "🚫 拒绝", "callback_data": "rta:%s:%s:block" % (typ, value)}])
+        rows.append([{"text": "➡ " + e, "callback_data": "rta:%s" % e}])
+    rows.append([{"text": "🌍 直连", "callback_data": "rta:direct"},
+                 {"text": "🚫 拒绝", "callback_data": "rta:block"}])
     rows.append([{"text": "« 返回", "callback_data": "menu:rules"}])
     return rows
 

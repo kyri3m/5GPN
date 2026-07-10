@@ -9,6 +9,6 @@ fail() { echo "$1" >&2; exit 1; }
 [[ "$body" == *'dnsdist --check-config -C "${DNSDIST_CANDIDATE}"'* ]] || fail "candidate dnsdist config is not validated"
 [[ "$body" == *'rollback_transaction()'* ]] || fail "rule update lacks rollback transaction"
 [[ "$body" == *'systemctl restart dnsdist'* ]] || fail "rule updater does not activate the validated config"
-[[ "$body" == *'install -m 0644 "${DNSDIST_CANDIDATE}" "${DNSDIST_CONF}"'* ]] || fail "validated candidate is not atomically committed"
+[[ "$body" == *'os.replace(src, dst)'* ]] || fail "validated candidate is not atomically committed"
 
 echo "dnsdist update transaction policy OK"

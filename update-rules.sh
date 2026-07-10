@@ -423,8 +423,19 @@ else
     exit 1
 fi
 
-install -m 0644 "${DNSDIST_CANDIDATE}" "${DNSDIST_CONF}"
-rm -f "${DNSDIST_CANDIDATE}"
+python3 - "${DNSDIST_CANDIDATE}" "${DNSDIST_CONF}" <<'PYEOF'
+import os, sys
+src, dst = sys.argv[1:]
+os.chmod(src, 0o644)
+with open(src, "rb") as f:
+    os.fsync(f.fileno())
+os.replace(src, dst)
+dirfd = os.open(os.path.dirname(dst), os.O_DIRECTORY)
+try:
+    os.fsync(dirfd)
+finally:
+    os.close(dirfd)
+PYEOF
 
 ensure_dnsdist_active() {
     sleep 1

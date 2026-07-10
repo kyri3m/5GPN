@@ -30,7 +30,7 @@ done
 # Rule updates must validate a candidate before replacing the live rule file.
 [[ "$body" == *'candidate_rules'* ]] || fail "set_rules lacks a candidate rules file"
 [[ "$body" == *'build_smart_candidate'* ]] || fail "set_rules lacks candidate config validation"
-[[ "$body" == *'install -m 644 "$candidate_rules" "${RULES_FILE}"'* ]] || \
+[[ "$body" == *'atomic_install "$candidate_rules" "${RULES_FILE}" 0644'* ]] || \
   fail "candidate rules are not atomically installed after validation"
 
 # Bot async implementation and policy test must agree on the thread pool model.
