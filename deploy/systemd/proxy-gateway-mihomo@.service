@@ -5,12 +5,16 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${BASE_DIR}/bin/mihomo -d /etc/proxy-gateway/exits -f /etc/proxy-gateway/exits/%i.yaml
+ExecStart=/root/5GPN/bin/mihomo -d /etc/proxy-gateway/exits -f /etc/proxy-gateway/exits/%i.yaml
 ExecStartPost=-/usr/local/bin/proxy-gateway-apply-exit.sh
 Restart=on-failure
 RestartSec=5
 User=root
 LimitNOFILE=65535
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/etc/proxy-gateway/exits /run /dev/net/tun
 
 [Install]
 WantedBy=multi-user.target

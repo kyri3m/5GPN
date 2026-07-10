@@ -25,7 +25,7 @@ bot_body="$(cat "${bot}")"
 # --- Telegram button interactions should stay responsive ---------------------
 [[ "${bot_body}" == *'http.client.HTTPSConnection("api.telegram.org"'* ]] || fail "tgbot.py must reuse a keep-alive Telegram HTTPS connection"
 [[ "${bot_body}" == *'def answer_callback_async('* ]] || fail "tgbot.py must answer callbacks asynchronously"
-[[ "${bot_body}" == *'threading.Thread(target=go, daemon=True).start()'* ]] || fail "callback answers must run in a daemon thread"
+[[ "${bot_body}" == *'_POOL.submit(go)'* ]] || fail "callback answers must run in the bounded thread pool"
 [[ "${bot_body}" == *'answer_callback_async(cb_id)'* ]] || fail "authorized callback handling must not block on answerCallbackQuery"
 [[ "${bot_body}" == *'_TG_LOCAL = threading.local()'* ]] || fail "tgbot.py must use per-thread Telegram API connections"
 [[ "${bot_body}" == *'def edit_async('* ]] || fail "tgbot.py must run long callback operations asynchronously"

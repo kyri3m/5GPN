@@ -14,8 +14,11 @@ import re
 import ssl
 import sys
 import hashlib
+import ipaddress
+import socket
 import urllib.request
 import urllib.error
+from urllib.parse import urlsplit
 
 # Matchers we can apply on the gateway (domain/IP/list based).
 KEEP = {"DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "IP-CIDR", "IP-CIDR6",
@@ -28,6 +31,37 @@ MODIFIERS = re.compile(r"^(no-resolve|extended-matching|dns-failed|pre-matching"
                        r"|update-interval=.*|interval=.*)$", re.I)
 
 DOMAIN_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?)+$")
+MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
+
+
+def validate_remote_url(url):
+    """Allow only HTTPS URLs whose hostname resolves exclusively to public IPs."""
+    try:
+        parsed = urlsplit(url)
+    except ValueError as exc:
+        raise ValueError("invalid URL: %s" % exc) from exc
+    if parsed.scheme.lower() != "https":
+        raise ValueError("only https:// rule URLs are allowed")
+    if not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("rule URL must contain a hostname and no credentials")
+    try:
+        infos = socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise ValueError("cannot resolve rule URL hostname") from exc
+    addresses = {item[4][0] for item in infos}
+    if not addresses:
+        raise ValueError("rule URL hostname has no addresses")
+    for address in addresses:
+        ip = ipaddress.ip_address(address)
+        if not ip.is_global:
+            raise ValueError("private or non-global rule URL address is not allowed")
+    return url
+
+
+class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        validate_remote_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def csv_split(s):
@@ -103,19 +137,28 @@ def emit(typ, value, category, sink):
 
 
 def fetch(url, max_bytes=None):
+    validate_remote_url(url)
     ctx = ssl.create_default_context()
     req = urllib.request.Request(url, headers={"User-Agent": "proxy-gateway/1.0"})
-    with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
-        if max_bytes:
-            return r.read(max_bytes)
-        return r.read()
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=ctx), SafeRedirectHandler())
+    with opener.open(req, timeout=10) as r:
+        if max_bytes is not None:
+            return r.read(min(max_bytes, MAX_DOWNLOAD_BYTES))
+        declared = r.headers.get("Content-Length")
+        if declared and int(declared) > MAX_DOWNLOAD_BYTES:
+            raise ValueError("rule file exceeds 20 MiB limit")
+        data = r.read(MAX_DOWNLOAD_BYTES + 1)
+        if len(data) > MAX_DOWNLOAD_BYTES:
+            raise ValueError("rule file exceeds 20 MiB limit")
+        return data
 
 
 def detect_format(data, url=""):
-    """Auto-detect rule format: clash, csv, srs, plain"""
+    """Auto-detect supported text formats; reject binary sing-box SRS."""
     text = data[:4096].decode("utf-8", "replace") if isinstance(data, bytes) else str(data)[:4096]
     if url.lower().endswith(".srs"):
-        return "srs"
+        raise ValueError("sing-box .srs binary rules are not supported; use Clash YAML or a text list")
     if text.strip().startswith(("payload:", "rules:", "rule-providers:", "{")):
         return "clash"
     first_lines = [l for l in text.splitlines() if l.strip() and not l.strip().startswith(("#", ";", "!", "["))]
@@ -255,7 +298,7 @@ def main():
     # Default: import from local file
     rules, cats = [], {}
     final = None
-    dropped, flattened = 0, 0
+    dropped, flattened, and_dropped = 0, 0, 0
 
     for raw in open(sys.argv[1], encoding="utf-8"):
         line = raw.strip()
@@ -263,7 +306,14 @@ def main():
             continue
         typ = line.split(",", 1)[0].strip().upper()
 
-        if typ in ("OR", "AND"):
+        if typ == "AND":
+            # The gateway rule format cannot preserve logical conjunction.
+            # Expanding members would silently turn AND into OR and broaden policy.
+            and_dropped += 1
+            dropped += 1
+            continue
+
+        if typ == "OR":
             members, policy = parse_logical(line)
             if not policy: continue
             took = False
@@ -297,8 +347,8 @@ def main():
         cats[final] = True
 
     sys.stdout.write("\n".join(rules) + "\n")
-    sys.stderr.write("converted=%d dropped=%d or_flattened=%d categories=%d\n"
-                     % (len(rules), dropped, flattened, len(cats)))
+    sys.stderr.write("converted=%d dropped=%d or_flattened=%d and_dropped=%d categories=%d\n"
+                     % (len(rules), dropped, flattened, and_dropped, len(cats)))
     sys.stderr.write("CATEGORIES=" + "\t".join(sorted(cats)) + "\n")
 
 

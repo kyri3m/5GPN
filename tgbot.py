@@ -1861,8 +1861,19 @@ def services_menu(prefix):
 # --------------------------------------------------------------------------- #
 # Update handling
 # --------------------------------------------------------------------------- #
-def authorized(uid):
+RULE_TYPES = {"DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "IP-CIDR", "IP-CIDR6", "GEOSITE", "GEOIP"}
+
+
+def authorized(uid, chat):
+    """Administrative operations are private-chat only."""
+    if not isinstance(chat, dict) or chat.get("type") != "private":
+        return False
     return uid in ADMIN_IDS
+
+
+def valid_rule_target(target):
+    return target in {"direct", "block"} or (
+        target not in {"local", "smart"} and target in parse_exit_names())
 
 
 def handle_message(msg):
@@ -1874,7 +1885,7 @@ def handle_message(msg):
         send(chat_id, "你的 Telegram 数字 ID: <code>%d</code>" % uid)
         return
 
-    if not authorized(uid):
+    if not authorized(uid, msg.get("chat", {})):
         send(chat_id, "⛔ 未授权。把你的 ID 加入 TG_ADMIN_IDS 后重试。")
         return
 
@@ -2012,7 +2023,7 @@ def handle_callback(cb):
     data = cb.get("data", "")
     cb_id = cb["id"]
 
-    if not authorized(uid):
+    if not authorized(uid, cb.get("message", {}).get("chat", {})):
         tg("answerCallbackQuery", callback_query_id=cb_id, text="⛔ 未授权", show_alert=True)
         return
 
@@ -2130,7 +2141,11 @@ def handle_callback(cb):
         edit_async(cb, op_firewall_status, keyboard=firewall_menu())
     elif data.startswith("fw_del:"):
         port_key = data[len("fw_del:"):]
-        if port_key == "22/tcp":
+        if not re.fullmatch(r"[0-9]{1,5}/(?:tcp|udp)", port_key):
+            edit(cb, "端口参数无效。", firewall_del_menu())
+        elif not 1 <= int(port_key.split("/", 1)[0]) <= 65535:
+            edit(cb, "端口范围无效。", firewall_del_menu())
+        elif port_key == "22/tcp":
             edit(cb, "🚫 <b>禁止关闭 22/tcp</b>（SSH 端口），这是出于安全考虑。", firewall_del_menu())
         else:
             edit(cb, "⏳ 正在关闭端口 %s…" % html.escape(port_key))
@@ -2146,7 +2161,7 @@ def handle_callback(cb):
              "发送规则集 URL，支持：\n"
              "• Clash rule-provider YAML\n"
              "• Surge / Quantumult 列表\n"
-             "• sing-box .srs / mihomo YAML 规则集\n"
+             "• mihomo / Clash YAML 规则集（不支持 sing-box .srs）\n"
              "• 纯文本域名列表\n\n"
              "发送 /cancel 取消。")
     elif data == "rules:refresh":
@@ -2164,23 +2179,35 @@ def handle_callback(cb):
             edit(cb, "未知模板。", rules_menu())
     elif data.startswith("rt:"):
         typ = data[len("rt:"):]
-        PENDING[chat_id] = {"action": "rule_value", "type": typ}
-        hint = {"DOMAIN": "完整域名，如 openai.com",
-                "DOMAIN-SUFFIX": "域名后缀，如 google.com（匹配 *.google.com）",
-                "DOMAIN-KEYWORD": "域名包含的关键词，如 netflix",
-                "IP-CIDR": "IP 段，如 1.2.3.0/24",
-                "GEOSITE": "地理站点分类，如 telegram, netflix",
-                "GEOIP": "国家代码，如 cn, us, jp"}.get(typ, "值")
-        edit(cb, "输入 %s 的%s：\n发送 /cancel 取消。" % (html.escape(typ), hint))
-    elif data.startswith("rta:"):
-        parts = data[4:].split(":", 2)
-        if len(parts) == 3:
-            typ, value, target = parts
-            rule = "%s,%s,%s" % (typ, value, target)
-            edit(cb, "⏳ 正在添加规则…")
-            edit_async(cb, lambda: op_add_rule(rule), back_kb("menu:rules"))
+        if typ not in RULE_TYPES:
+            edit(cb, "不支持的规则类型。", rules_menu())
         else:
-            edit(cb, "参数错误，请重试。", rules_menu())
+            PENDING[chat_id] = {"action": "rule_value", "type": typ}
+            hint = {"DOMAIN": "完整域名，如 openai.com",
+                    "DOMAIN-SUFFIX": "域名后缀，如 google.com（匹配 *.google.com）",
+                    "DOMAIN-KEYWORD": "域名包含的关键词，如 netflix",
+                    "IP-CIDR": "IP 段，如 1.2.3.0/24",
+                    "IP-CIDR6": "IPv6 段，如 2001:db8::/32",
+                    "GEOSITE": "地理站点分类，如 telegram, netflix",
+                    "GEOIP": "国家代码，如 cn, us, jp"}.get(typ, "值")
+            edit(cb, "输入 %s 的%s：\n发送 /cancel 取消。" % (html.escape(typ), hint))
+    elif data.startswith("rta:"):
+        state = PENDING.get(chat_id) or {}
+        if state.get("action") != "rule_target":
+            edit(cb, "操作已过期，请重新添加规则。", rules_menu())
+        else:
+            typ = state.get("type", "")
+            value = state.get("value", "")
+            target = data.rsplit(":", 1)[-1]
+            if typ not in RULE_TYPES or not value:
+                edit(cb, "规则参数无效，请重试。", rules_menu())
+            elif not valid_rule_target(target):
+                edit(cb, "目标出口不存在或已变化。", rules_menu())
+            else:
+                PENDING.pop(chat_id, None)
+                rule = "%s,%s,%s" % (typ, value, target)
+                edit(cb, "⏳ 正在添加规则…")
+                edit_async(cb, lambda: op_add_rule(rule), back_kb("menu:rules"))
     elif data == "gfwl:import_set":
         PENDING[chat_id] = {"action": "gfwl_set_url"}
         edit(cb,
@@ -2204,8 +2231,11 @@ def handle_callback(cb):
         edit(cb, op_status(), back_kb("menu:main"))
     elif data.startswith("logs:"):
         svc = data[len("logs:"):]
-        edit(cb, "📜 正在取 <b>%s</b> 日志…" % html.escape(svc))
-        edit_async(cb, lambda: op_logs(svc), back_kb("menu:logs"), mono=True)
+        if svc not in SERVICES:
+            edit(cb, "服务参数无效。", back_kb("menu:logs"))
+        else:
+            edit(cb, "📜 正在取 <b>%s</b> 日志…" % html.escape(svc))
+            edit_async(cb, lambda: op_logs(svc), back_kb("menu:logs"), mono=True)
     elif data == "exits:check":
         edit(cb, "⏳ 正在检查出口连通性…")
         edit_async(cb, op_check_exits, back_kb("menu:exits"))
@@ -2224,19 +2254,28 @@ def handle_callback(cb):
         edit(cb, "选择兜底规则（未匹配规则的默认出口）：", final_target_menu())
     elif data.startswith("fin:"):
         target = data[len("fin:"):]
-        edit(cb, "⏳ 正在设置兜底规则 → <b>%s</b>…" % html.escape(target))
-        edit_async(cb, lambda: op_set_final(target), keyboard=rules_menu)
+        if not valid_rule_target(target):
+            edit(cb, "目标出口不存在或已变化。", rules_menu())
+        else:
+            edit(cb, "⏳ 正在设置兜底规则 → <b>%s</b>…" % html.escape(target))
+            edit_async(cb, lambda: op_set_final(target), keyboard=rules_menu)
     elif data == "rules:enable":
         edit(cb, "⏳ 正在启用 smart 分流…")
         edit_async(cb, lambda: op_set_exit("smart"), back_kb("menu:rules"))
     elif data.startswith("exit:"):
         name = data[len("exit:"):]
-        edit(cb, "⏳ 正在切换出口到 <b>%s</b>…" % html.escape(name))
-        edit_async(cb, lambda: op_set_exit(name), back_kb("menu:exits"))
+        if name != "local" and name not in parse_exit_names():
+            edit(cb, "出口不存在或已变化。", back_kb("menu:exits"))
+        else:
+            edit(cb, "⏳ 正在切换出口到 <b>%s</b>…" % html.escape(name))
+            edit_async(cb, lambda: op_set_exit(name), back_kb("menu:exits"))
     elif data.startswith("exitdel:"):
         name = data[len("exitdel:"):]
-        edit(cb, "⏳ 正在删除出口 <b>%s</b>…" % html.escape(name))
-        edit_async(cb, lambda: op_del_exit(name), back_kb("menu:exits"))
+        if name in {"local", "smart"} or name not in parse_exit_names():
+            edit(cb, "出口不存在、已变化或不可删除。", back_kb("menu:exits"))
+        else:
+            edit(cb, "⏳ 正在删除出口 <b>%s</b>…" % html.escape(name))
+            edit_async(cb, lambda: op_del_exit(name), back_kb("menu:exits"))
     elif data == "act:ios":
         edit(cb, "⏳ 正在生成 iOS 二维码…")
         edit_ios_async(cb, chat_id)
@@ -2258,13 +2297,13 @@ def handle_callback(cb):
             idx, target = int(parts[1]), parts[2]
         except (ValueError, IndexError):
             idx, target = -1, ""
-        if 0 <= idx < len(pm):
+        if 0 <= idx < len(pm) and valid_rule_target(target):
             cat = pm[idx][0]
             edit(cb, "⏳ 正在设置 <b>%s</b> → <b>%s</b> 并重建分流（可能较久）…"
                  % (html.escape(cat), html.escape(target)))
             edit_async(cb, lambda: op_set_policy(cat, target), back_kb("menu:policy"))
         else:
-            edit(cb, "分类已变化，请重新打开。", policy_menu())
+            edit(cb, "分类或目标出口已变化，请重新打开。", policy_menu())
     else:
         edit(cb, "未知操作。", back_kb("menu:main"))
 

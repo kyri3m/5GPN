@@ -35,7 +35,7 @@ done
     || fail "iptables mark path must iterate the private/client exclusion list"
 [[ "${install_body}" == *'-d "$pn" -j RETURN'* ]] \
     || fail "iptables mark path must RETURN (not mark) excluded destinations"
-[[ "${install_body}" == *'ip rule add fwmark'* ]] || fail "install.sh must add a fwmark policy-routing rule"
+[[ "${install_body}" == *'ip -4 rule add fwmark'* ]] || fail "install.sh must add a fwmark policy-routing rule"
 [[ "${install_body}" == *'ip route replace default dev'* ]] || fail "install.sh must route marked traffic into the exit interface"
 
 # --- boot persistence --------------------------------------------------------

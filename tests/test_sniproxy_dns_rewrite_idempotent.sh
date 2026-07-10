@@ -1,52 +1,35 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-tmp="$(mktemp -d)"
-trap 'rm -rf "${tmp}"' EXIT
-
-mkdir -p "${tmp}/bin"
-cat > "${tmp}/systemctl" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-chmod +x "${tmp}/systemctl"
-
-mkdir -p "${tmp}/etc/dnsdist" "${tmp}/opt/etc" "${tmp}/systemd"
-cat > "${tmp}/sniproxy.conf" <<'EOF'
+tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+cat > "$tmp/sniproxy.conf" <<'EOF'
 user pxout
-pidfile /var/run/sniproxy.pid
-
 resolver {
     nameserver 22.22.22.22
     mode ipv4_only
 }
-
 listener 80 {
     proto http
 }
 EOF
-cat > "${tmp}/update-dnsdist-rules.sh" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-chmod +x "${tmp}/update-dnsdist-rules.sh"
 
-script="${tmp}/install-wrapper.sh"
-sed \
-  -e "s#/etc/sniproxy.conf#${tmp}/sniproxy.conf#g" \
-  -e "s#/etc/dnsdist#${tmp}/etc/dnsdist#g" \
-  -e "s#/opt/proxy-gateway/etc#${tmp}/opt/etc#g" \
-  -e "s#/etc/systemd/system/china-dns-race-proxy.service#${tmp}/systemd/china-dns-race-proxy.service#g" \
-  -e "s#/usr/local/bin/update-dnsdist-rules.sh#${tmp}/update-dnsdist-rules.sh#g" \
-  "${root}/install.sh" > "${script}"
-chmod +x "${script}"
+python3 - "$root/install.sh" "$tmp/rewrite.py" <<'PY'
+import sys
+text=open(sys.argv[1], encoding="utf-8").read()
+start='python3 - /etc/sniproxy.conf "$nameservers" <<\'PYEOF\'\n'
+assert start in text
+code=text.split(start,1)[1].split('\nPYEOF',1)[0]
+open(sys.argv[2], 'w', encoding='utf-8').write(code+'\n')
+PY
 
-PATH="${tmp}/bin:${PATH}" bash "${script}" --set-dns "22.22.22.22" "223.5.5.5"
-PATH="${tmp}/bin:${PATH}" bash "${script}" --set-dns "22.22.22.22" "223.5.5.5"
+nameservers=$'    nameserver 22.22.22.22\n    nameserver 8.8.8.8'
+python3 "$tmp/rewrite.py" "$tmp/sniproxy.conf" "$nameservers"
+python3 "$tmp/rewrite.py" "$tmp/sniproxy.conf" "$nameservers"
+grep -q 'nameserver 22.22.22.22' "$tmp/sniproxy.conf"
+grep -q 'nameserver 8.8.8.8' "$tmp/sniproxy.conf"
+grep -q 'mode ipv4_only' "$tmp/sniproxy.conf"
+[[ "$(grep -c '^resolver {$' "$tmp/sniproxy.conf")" -eq 1 ]] || { echo "resolver block duplicated" >&2; exit 1; }
+[[ "$(grep -c 'nameserver 22.22.22.22' "$tmp/sniproxy.conf")" -eq 1 ]] || { echo "nameserver duplicated" >&2; exit 1; }
 
-grep -q 'nameserver 22.22.22.22' "${tmp}/sniproxy.conf" || { echo "sniproxy DNS missing" >&2; exit 1; }
-grep -q 'mode ipv4_only' "${tmp}/sniproxy.conf" || { echo "sniproxy ipv4_only missing" >&2; exit 1; }
-[[ "$(grep -c '^resolver {$' "${tmp}/sniproxy.conf")" -eq 1 ]] || { echo "resolver block duplicated" >&2; exit 1; }
-
+grep -q 'os.replace(candidate, path)' "$tmp/rewrite.py" || { echo "rewrite is not atomic" >&2; exit 1; }
 echo "sniproxy DNS rewrite idempotency OK"

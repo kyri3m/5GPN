@@ -5,7 +5,7 @@
 
 -- Server identity
 setServerPolicy(leastOutstanding)
-addLocal("0.0.0.0:53", {doTCP=true})
+addLocal("0.0.0.0:53")
 
 -- DoT listener (port 853)
 -- Certificates are copied to /etc/dnsdist/certs/ by install.sh / renew hook

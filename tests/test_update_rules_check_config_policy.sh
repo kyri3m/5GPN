@@ -4,7 +4,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 rules="$(cat "${root}/update-rules.sh")"
 
-if [[ "${rules}" != *'dnsdist --check-config -C "${DNSDIST_CONF}"'* ]]; then
+if [[ "${rules}" != *'dnsdist --check-config -C "${DNSDIST_CANDIDATE}"'* ]]; then
     echo "update-rules.sh must validate generated dnsdist.conf before reloading dnsdist." >&2
     exit 1
 fi

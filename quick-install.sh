@@ -2,7 +2,7 @@
 #
 # One-click installer for 5gpn — downloads the repo and runs install.sh.
 #
-#   curl -fsSL https://raw.githubusercontent.com/lingchenfs1/5gpn/main/quick-install.sh -o /tmp/5gpn.sh && sudo bash /tmp/5gpn.sh
+#   curl -fsSL https://raw.githubusercontent.com/kyri3m/5GPN/main/quick-install.sh -o /tmp/5gpn.sh && sudo bash /tmp/5gpn.sh
 #
 # (Avoid `sudo bash <(curl ...)`: newer sudo closes the process-substitution
 #  fd, which fails as "/dev/fd/63: No such file or directory" on e.g. Debian 13.)
@@ -12,9 +12,9 @@
 #
 set -euo pipefail
 
-REPO="Xiuyixx/5GPN-X"
+REPO="kyri3m/5GPN"
 BRANCH="${PGW_BRANCH:-main}"
-DIR="${PGW_SRC_DIR:-/opt/5gpn}"
+DIR="${PGW_SRC_DIR:-/root/5GPN}"
 
 RED='\033[0;31m'; BLUE='\033[0;34m'; GREEN='\033[0;32m'; NC='\033[0m'
 info() { echo -e "${BLUE}[INFO]${NC} $*"; }

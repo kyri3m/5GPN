@@ -15,6 +15,48 @@ DEFAULT_RULES_FILE="/etc/proxy-gateway/rules-default.conf"
 DNSDIST_TEMPLATE="${BASE_DIR}/dnsdist.conf.template"
 DNSDIST_CONF="/etc/dnsdist/dnsdist.conf"
 DEFAULT_REMOTE_DNS=("1.1.1.1" "8.8.8.8")
+LOCK_FILE="/run/lock/proxy-gateway-rules.lock"
+TXN_BACKUP=""
+TXN_COMMITTED=0
+
+begin_transaction() {
+    mkdir -p /run/lock "${BASE_DIR}"
+    exec 9>"${LOCK_FILE}"
+    flock -n 9 || { echo "[!] Another rule/DNS update is already running" >&2; exit 1; }
+    TXN_BACKUP="$(mktemp -d "${BASE_DIR}/update-backup.XXXXXX")"
+    local f
+    for f in gfwlist.raw gfwlist.lua chinalist.raw chinalist.lua dnsdist.conf; do
+        [[ -e "${BASE_DIR}/${f}" ]] && cp -a "${BASE_DIR}/${f}" "${TXN_BACKUP}/${f}"
+    done
+    [[ -d "${CHINALIST_CHUNK_DIR}" ]] && cp -a "${CHINALIST_CHUNK_DIR}" "${TXN_BACKUP}/chinalist.d"
+}
+
+rollback_transaction() {
+    [[ -n "${TXN_BACKUP}" && -d "${TXN_BACKUP}" ]] || return 0
+    local f
+    for f in gfwlist.raw gfwlist.lua chinalist.raw chinalist.lua dnsdist.conf; do
+        if [[ -e "${TXN_BACKUP}/${f}" ]]; then
+            install -m 0644 "${TXN_BACKUP}/${f}" "${BASE_DIR}/${f}"
+        else
+            rm -f "${BASE_DIR}/${f}"
+        fi
+    done
+    rm -rf "${CHINALIST_CHUNK_DIR}"
+    [[ -d "${TXN_BACKUP}/chinalist.d" ]] && cp -a "${TXN_BACKUP}/chinalist.d" "${CHINALIST_CHUNK_DIR}"
+}
+
+finish_transaction() {
+    local rc=$?
+    trap - EXIT
+    if (( rc != 0 && TXN_COMMITTED == 0 )); then
+        echo "[!] Rule update failed; restoring previous DNS files" >&2
+        rollback_transaction
+        systemctl restart dnsdist 2>/dev/null || true
+    fi
+    [[ -n "${TXN_BACKUP}" ]] && rm -rf "${TXN_BACKUP}"
+    exit "$rc"
+}
+trap finish_transaction EXIT
 
 render_remote_dns_servers() {
     local input="${1:-}"
@@ -254,12 +296,16 @@ write_chinalist_chunks() {
 
 echo "[$(date)] Starting rule update..."
 mkdir -p "${BASE_DIR}"
+begin_transaction
 
 echo "[*] Downloading GFWList..."
-if ! wget -qO "${GFWLIST_FILE}" "${GFWLIST_URL}" 2>/dev/null; then
+if ! wget -qO "${GFWLIST_FILE}.download" "${GFWLIST_URL}" 2>/dev/null; then
     echo "[!] Failed to download GFWList"
+    rm -f "${GFWLIST_FILE}.download"
     touch "${GFWLIST_LUA}" 2>/dev/null || true
 else
+    install -m 0644 "${GFWLIST_FILE}.download" "${GFWLIST_FILE}"
+    rm -f "${GFWLIST_FILE}.download"
     echo "[*] Parsing GFWList..."
     decoded="${BASE_DIR}/gfwlist.decoded"
     true >"${decoded}"
@@ -298,10 +344,13 @@ append_local_gfwlist_extras
 append_default_rule_domains
 
 echo "[*] Downloading ChinaList..."
-if ! wget -qO "${CHINALIST_FILE}" "${CHINALIST_URL}" 2>/dev/null; then
+if ! wget -qO "${CHINALIST_FILE}.download" "${CHINALIST_URL}" 2>/dev/null; then
     echo "[!] Failed to download ChinaList"
+    rm -f "${CHINALIST_FILE}.download"
     touch "${CHINALIST_LUA}" 2>/dev/null || true
 else
+    install -m 0644 "${CHINALIST_FILE}.download" "${CHINALIST_FILE}"
+    rm -f "${CHINALIST_FILE}.download"
     echo "[*] Parsing ChinaList..."
     tmp_chunk_dir=$(mktemp -d "${BASE_DIR}/chinalist.d.tmp.XXXXXX")
     tmp_loader=$(mktemp "${BASE_DIR}/chinalist.lua.tmp.XXXXXX")
@@ -316,6 +365,7 @@ if [[ ! -f "${DNSDIST_TEMPLATE}" ]]; then
 fi
 
 echo "[*] Generating dnsdist configuration..."
+DNSDIST_CANDIDATE=$(mktemp "${BASE_DIR}/dnsdist.conf.candidate.XXXXXX")
 
 SERVER_IP=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[\d.]+' || echo "127.0.0.1")
 DOMAIN=$(cat "${BASE_DIR}/.domain" 2>/dev/null || echo "example.com")
@@ -329,7 +379,7 @@ REMOTE_DNS_SERVERS=$(render_remote_dns_servers "$REMOTE_DNS" "remote" "remote")
 PACKET_CACHE_SIZE=$(cat "${BASE_DIR}/.cache_size" 2>/dev/null || echo "500000")
 [[ "${PACKET_CACHE_SIZE}" =~ ^[0-9]+$ ]] || PACKET_CACHE_SIZE=500000
 
-python3 - "${DNSDIST_TEMPLATE}" "${GFWLIST_LUA}" "${CHINALIST_LUA}" "${SERVER_IP}" "${CERT_BASENAME}" "${REMOTE_DNS_SERVERS}" "${PACKET_CACHE_SIZE}" "${DNSDIST_CONF}" <<'PYEOF'
+python3 - "${DNSDIST_TEMPLATE}" "${GFWLIST_LUA}" "${CHINALIST_LUA}" "${SERVER_IP}" "${CERT_BASENAME}" "${REMOTE_DNS_SERVERS}" "${PACKET_CACHE_SIZE}" "${DNSDIST_CANDIDATE}" <<'PYEOF'
 import sys
 template_path = sys.argv[1]
 gfw_path = sys.argv[2]
@@ -363,14 +413,18 @@ echo "[OK]   dnsdist configuration generated"
 
 if command -v dnsdist >/dev/null 2>&1; then
     echo "[*] Validating dnsdist configuration..."
-    if ! dnsdist --check-config -C "${DNSDIST_CONF}"; then
+    if ! dnsdist --check-config -C "${DNSDIST_CANDIDATE}"; then
         echo "[!] Generated dnsdist configuration failed validation; leaving running dnsdist unchanged." >&2
         exit 1
     fi
     echo "[OK]   dnsdist configuration validated"
 else
-    echo "[!]    dnsdist binary not found; skipping config validation"
+    echo "[!] dnsdist binary not found; refusing to commit an unvalidated configuration" >&2
+    exit 1
 fi
+
+install -m 0644 "${DNSDIST_CANDIDATE}" "${DNSDIST_CONF}"
+rm -f "${DNSDIST_CANDIDATE}"
 
 ensure_dnsdist_active() {
     sleep 1
@@ -389,5 +443,8 @@ if systemctl is-active --quiet dnsdist; then
 else
     systemctl start dnsdist
 fi
+
+systemctl is-active --quiet dnsdist || { echo "[!] dnsdist failed to become active" >&2; exit 1; }
+TXN_COMMITTED=1
 
 echo "[$(date)] Rule update completed."

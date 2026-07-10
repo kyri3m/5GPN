@@ -255,7 +255,7 @@ DOMAIN,api.example.com,direct
 GEOSITE,telegram,us
 GEOIP,cn,direct
 RULE-SET,https://example.com/list.txt,us
-RULE-SET,https://example.com/rules.srs,jp
+RULE-SET,https://example.com/rules.yaml,jp
 DOMAIN-SUFFIX,cn,direct
 FINAL,us
 EOF
