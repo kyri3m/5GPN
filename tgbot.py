@@ -529,6 +529,7 @@ def invalidate_exit_ip_cache():
 # Telegram API
 # --------------------------------------------------------------------------- #
 _TG_LOCAL = threading.local()
+_TG_IDLE_TTL = 20.0
 
 
 def tg(method, **params):
@@ -536,15 +537,25 @@ def tg(method, **params):
     path = "/bot%s/%s" % (TOKEN, method)
     headers = {"Content-Type": "application/json", "Connection": "keep-alive"}
     for attempt in (0, 1):
+        started = time.monotonic()
         try:
             conn = getattr(_TG_LOCAL, "conn", None)
+            last_used = getattr(_TG_LOCAL, "last_used", 0.0)
+            if conn is not None and time.monotonic() - last_used > _TG_IDLE_TTL:
+                conn.close()
+                conn = None
+                _TG_LOCAL.conn = None
             if conn is None:
-                conn = http.client.HTTPSConnection("api.telegram.org", timeout=70)
+                request_timeout = 70 if method == "getUpdates" else 15
+                conn = http.client.HTTPSConnection("api.telegram.org", timeout=request_timeout)
                 _TG_LOCAL.conn = conn
             conn.request("POST", path, data, headers)
             raw = conn.getresponse().read()
+            _TG_LOCAL.last_used = time.monotonic()
             return json.loads(raw.decode("utf-8")) if raw else {}
         except Exception as e:
+            print("[warn] Telegram %s attempt %d failed after %.2fs: %s" %
+                  (method, attempt + 1, time.monotonic() - started, e), file=sys.stderr)
             try:
                 conn = getattr(_TG_LOCAL, "conn", None)
                 if conn:
@@ -552,6 +563,7 @@ def tg(method, **params):
             except Exception:
                 pass
             _TG_LOCAL.conn = None
+            _TG_LOCAL.last_used = 0.0
             if attempt:
                 return {"ok": False, "error": str(e)}
 
